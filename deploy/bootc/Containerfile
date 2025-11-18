@@ -63,14 +63,11 @@ EXPOSE 8000
 # Scripts + env
 # -----------------------------------------------------------------------------
 COPY launch-vllm.sh /opt/rhoim/bin/launch-vllm.sh
-COPY gpu-detect.sh  /opt/rhoim/bin/gpu-detect.sh
 COPY rhoim.env      /etc/sysconfig/rhoim
-COPY gateway        /opt/rhoim/gateway
+ 
 
 RUN chmod +x /opt/rhoim/bin/*.sh \
-    && chown rhoim:rhoim /opt/rhoim/bin/*.sh \
-    && chown -R rhoim:rhoim /opt/rhoim/gateway \
-    && /opt/rhoim/venv/bin/pip install --no-cache-dir -r /opt/rhoim/gateway/requirements.txt
+    && chown rhoim:rhoim /opt/rhoim/bin/*.sh
 
 # -----------------------------------------------------------------------------
 # Systemd units
