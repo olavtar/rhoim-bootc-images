@@ -1,5 +1,5 @@
-vllm[cpu]
-fastapi
 transformers
-accelerate
+sentencepiece
 huggingface_hub
+fastapi
+uvicorn[standard]

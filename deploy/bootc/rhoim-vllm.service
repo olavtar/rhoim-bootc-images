@@ -1,13 +1,17 @@
 [Unit]
-Description=RHOIM vLLM Model Serving Service
+Description=RHOIM vLLM Model Server
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-# NEW: ExecStart calls the initializer script
-ExecStart=/usr/local/bin/initializer-entrypoint.sh
-Restart=always
-RestartSec=10
+User=rhoim
+Group=rhoim
+EnvironmentFile=-/etc/sysconfig/rhoim
+WorkingDirectory=/opt/rhoim
+ExecStart=/opt/rhoim/bin/launch-vllm.sh
+Restart=on-failure
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target

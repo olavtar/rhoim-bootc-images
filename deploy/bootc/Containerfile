@@ -1,63 +1,88 @@
-# Start with a suitable base image for UBI and bootc
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+# =============================================================================
+# RHOIM Bootc Containerfile - vLLM Model Serving (RHEL 9 bootc)
+# =============================================================================
+# Base: RHEL 9 bootc, requires:
+#   podman login registry.redhat.io
+# Build (Linux x86_64 recommended):
+#   podman build --platform linux/amd64 -t localhost/rhoim-bootc:latest -f Containerfile .
+# =============================================================================
 
-# --- Configuration ---
-ENV MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-ENV MODEL_PATH="/opt-app-root/models"
-ENV VLLM_PORT="8000"
-ENV VLLM_HOST="0.0.0.0"
-ENV PYTHONUNBUFFERED=1
-ENV VENV_PATH=/opt-app-root/venv
-ENV VLLM_NO_CUDA="1"
+FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
-# 1. Install necessary system packages for runtime and build tools
-# 🔥 FIX 1: Added 'kmod' (which provides the 'lsmod' command)
-RUN microdnf update -y && microdnf install -y \
-    gcc git tar gzip systemd procps-ng iproute kmod \
-    \
-    # Install Python 3.11 and development packages directly
-    && microdnf install -y python3.11 python3.11-pip python3.11-devel \
-    \
-    && microdnf clean all
+# Ensure pip is available without needing dnf/rpm-ostree (no subscription).
+RUN python3 -m ensurepip --upgrade || \
+    (curl -sSL https://bootstrap.pypa.io/get-pip.py | python3) || \
+    (curl -sSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py && python3 /tmp/get-pip.py)
 
-# 2. Setup Python Virtual Environment
-# Use the explicit python3.11 executable
-RUN /usr/bin/python3.11 -m venv $VENV_PATH
-ENV PATH="$VENV_PATH/bin:$PATH"
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
 
-# 3. Install Python Dependencies
-# Path updated to be relative to the build root
-COPY deploy/bootc/requirements.txt .
+# -----------------------------------------------------------------------------
+# Create app user + layout
+# -----------------------------------------------------------------------------
+RUN useradd -m -d /opt/rhoim -u 1001 rhoim \
+    && mkdir -p /opt/rhoim/{bin,models,gateway} /etc/sysconfig \
+    && chown -R rhoim:rhoim /opt/rhoim
 
-# 🔥 FIX 2: Pre-install build-time dependencies (numpy and wheel)
-RUN pip install --no-cache-dir wheel numpy \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple
+WORKDIR /opt/rhoim
 
-# Now, install the actual requirements
-RUN pip install --no-cache-dir -r requirements.txt \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple
-    
-# 4. Create model directory and expose port
-RUN mkdir -p $MODEL_PATH
+# -----------------------------------------------------------------------------
+# Python venv + packages (CPU vLLM in-image; GPU via RHAIIS image)
+# -----------------------------------------------------------------------------
+COPY requirements.txt /opt/rhoim/requirements.txt
+
+# Create venv and install deps into it
+RUN python3 -m venv /opt/rhoim/venv \
+    && /opt/rhoim/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    # Install CPU PyTorch from the official CPU index
+    && /opt/rhoim/venv/bin/pip install --no-cache-dir \
+         torch torchvision torchaudio \
+         --index-url https://download.pytorch.org/whl/cpu \
+    # Common Python deps (HF, FastAPI, etc.)
+    && /opt/rhoim/venv/bin/pip install --no-cache-dir -r /opt/rhoim/requirements.txt \
+    # vLLM itself (CPU-capable; we set VLLM_NO_CUDA=1 at runtime when needed)
+    && /opt/rhoim/venv/bin/pip install --no-cache-dir --ignore-installed "vllm==0.6.*"
+
+ENV PATH="/opt/rhoim/venv/bin:${PATH}"
+
+# -----------------------------------------------------------------------------
+# Default env (can be overridden via /etc/sysconfig/rhoim)
+# -----------------------------------------------------------------------------
+ENV MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0" \
+    MODEL_PATH="/opt/rhoim/models" \
+    VLLM_HOST="0.0.0.0" \
+    VLLM_PORT="8000" \
+    RHOIM_ACCELERATOR_MODE="auto" \
+    MAX_MODEL_LEN="2048" \
+    VLLM_LOGGING_LEVEL="INFO"
+
+RUN mkdir -p "${MODEL_PATH}" && chown -R rhoim:rhoim "${MODEL_PATH}"
 EXPOSE 8000
-EXPOSE 8080
 
-# 5. Add Systemd service components (VLLM and Gateway)
-# All paths updated to be relative to the build root
-COPY deploy/bootc/rhoim.env /etc/sysconfig/rhoim
+# -----------------------------------------------------------------------------
+# Scripts + env
+# -----------------------------------------------------------------------------
+COPY launch-vllm.sh /opt/rhoim/bin/launch-vllm.sh
+COPY gpu-detect.sh  /opt/rhoim/bin/gpu-detect.sh
+COPY rhoim.env      /etc/sysconfig/rhoim
 
-# Copy and enable the VLLM model serving service
-COPY deploy/bootc/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
-COPY deploy/bootc/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
-RUN chmod +x /usr/local/bin/initializer-entrypoint.sh
-RUN systemctl enable rhoim-vllm.service
+RUN chmod +x /opt/rhoim/bin/*.sh \
+    && chown rhoim:rhoim /opt/rhoim/bin/*.sh
 
-# Copy and enable the RHOIM Gateway service (This path is correct relative to root)
-COPY gateway/app /opt/rhoim/gateway
-COPY deploy/bootc/rhoim-gateway.service /etc/systemd/system/rhoim-gateway.service
-RUN systemctl enable rhoim-gateway.service
+# -----------------------------------------------------------------------------
+# Systemd units
+# -----------------------------------------------------------------------------
+COPY rhoim-vllm.service    /etc/systemd/system/rhoim-vllm.service
+COPY rhoim-gateway.service /etc/systemd/system/rhoim-gateway.service
 
-# 6. Final Command: Initialize Systemd (Mandatory for bootc)
+# bootc-friendly enable (no systemctl at build time)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /etc/systemd/system/rhoim-vllm.service \
+          /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service \
+    && ln -sf /etc/systemd/system/rhoim-gateway.service \
+          /etc/systemd/system/multi-user.target.wants/rhoim-gateway.service
+
+# -----------------------------------------------------------------------------
+# Bootc entrypoint – systemd as PID 1
+# -----------------------------------------------------------------------------
 CMD ["/sbin/init"]
