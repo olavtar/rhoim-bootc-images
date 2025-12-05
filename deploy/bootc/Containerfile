@@ -1,12 +1,7 @@
 # =============================================================================
 # RHOIM Bootc Containerfile - vLLM Model Serving (RHEL 9 bootc)
+# GPU via RHAIIS container, CPU vLLM in-image
 # =============================================================================
-# Base: RHEL 9 bootc, requires:
-#   podman login registry.redhat.io
-# Build (Linux x86_64 recommended):
-#   podman build --platform linux/amd64 -t localhost/rhoim-bootc:latest -f Containerfile .
-# =============================================================================
-
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Ensure pip is available without needing dnf/rpm-ostree (no subscription).
@@ -27,20 +22,22 @@ RUN useradd -m -d /opt/rhoim -u 1001 rhoim \
 WORKDIR /opt/rhoim
 
 # -----------------------------------------------------------------------------
-# Python venv + packages (CPU vLLM in-image; GPU via RHAIIS image)
+# Python venv + packages (CPU vLLM in-image; GPU via RHAIIS container)
 # -----------------------------------------------------------------------------
 COPY requirements.txt /opt/rhoim/requirements.txt
 
-# Create venv and install deps into it
 RUN python3 -m venv /opt/rhoim/venv \
     && /opt/rhoim/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
-    # Install CPU PyTorch from the official CPU index
+    \
+    # CPU PyTorch from official CPU index
     && /opt/rhoim/venv/bin/pip install --no-cache-dir \
          torch torchvision torchaudio \
          --index-url https://download.pytorch.org/whl/cpu \
+    \
     # Common Python deps (HF, FastAPI, etc.)
     && /opt/rhoim/venv/bin/pip install --no-cache-dir -r /opt/rhoim/requirements.txt \
-    # vLLM itself (CPU-capable; we set VLLM_NO_CUDA=1 at runtime when needed)
+    \
+    # vLLM itself (CPU-capable; used for fallback mode)
     && /opt/rhoim/venv/bin/pip install --no-cache-dir --ignore-installed "vllm==0.6.*"
 
 ENV PATH="/opt/rhoim/venv/bin:${PATH}"
@@ -64,7 +61,6 @@ EXPOSE 8000
 # -----------------------------------------------------------------------------
 COPY launch-vllm.sh /opt/rhoim/bin/launch-vllm.sh
 COPY rhoim.env      /etc/sysconfig/rhoim
- 
 
 RUN chmod +x /opt/rhoim/bin/*.sh \
     && chown rhoim:rhoim /opt/rhoim/bin/*.sh
@@ -75,7 +71,6 @@ RUN chmod +x /opt/rhoim/bin/*.sh \
 COPY rhoim-vllm.service    /etc/systemd/system/rhoim-vllm.service
 COPY rhoim-gateway.service /etc/systemd/system/rhoim-gateway.service
 
-# bootc-friendly enable (no systemctl at build time)
 RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
     && ln -sf /etc/systemd/system/rhoim-vllm.service \
           /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service \
