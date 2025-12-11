@@ -54,9 +54,14 @@ FROM registry.redhat.io/rhel9/rhel-bootc:latest
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
+# Fix venv python: ensure /opt/vllm-venv/bin/python3.11 works
+RUN rm -f /opt/vllm-venv/bin/python3.11 && \
+    printf '#!/bin/sh\nexec "$(dirname "$0")/python" "$@"\n' > /opt/vllm-venv/bin/python3.11 && \
+    chmod +x /opt/vllm-venv/bin/python3.11
+
 # 🔧 Ensure python3.11 exists in the venv for huggingface-cli shebang
-RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ] && [ -x /opt/vllm-venv/bin/python ]; then \
-      ln -s python /opt/vllm-venv/bin/python3.11; \
+RUN if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
+      echo "WARN: huggingface-cli not found in venv"; \
     fi
 
 # Optionally make venv first on PATH (nice but not strictly required)
