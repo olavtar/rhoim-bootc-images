@@ -62,7 +62,7 @@ RUN useradd -m -d /opt/rhoim -u 1001 rhoim \
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
 # Copy your entrypoint
-COPY initializer-entrypoint.sh /opt/rhoim/bin/initializer-entrypoint.sh
+COPY vllm/initializer-entrypoint.sh /opt/rhoim/bin/initializer-entrypoint.sh
 RUN chmod +x /opt/rhoim/bin/initializer-entrypoint.sh
 
 # Copy systemd unit (adjust path if your repo differs)
