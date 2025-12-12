@@ -52,8 +52,12 @@ RUN pip install --no-cache-dir \
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Install tools needed at runtime (for HF downloads etc.)
-RUN rpm-ostree install git ca-certificates curl python3.11-devel openssl-devel && \
-    rpm-ostree cleanup -m
+RUN rpm-ostree install \
+      git \
+      ca-certificates \
+      curl \
+      openssl \
+    && rpm-ostree cleanup -m
 
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
