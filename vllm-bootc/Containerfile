@@ -4,119 +4,79 @@
 FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 
 ARG PYTHON_VERSION=3.11
-ARG VLLM_VERSION=0.6.*
+ARG VLLM_VERSION=0.11.*
+ARG ACCELERATOR=cpu   # cpu | cuda
+ARG TORCH_VERSION=2.5.1
 
-# Build-time deps only (stay in builder image)
 RUN dnf -y install \
       python${PYTHON_VERSION} \
       python${PYTHON_VERSION}-pip \
       git jq which procps-ng \
   && dnf clean all
 
-# Create vLLM venv
+# Create venv
 RUN python${PYTHON_VERSION} -m venv /opt/vllm-venv
-
 ENV PATH="/opt/vllm-venv/bin:${PATH}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
-# Upgrade pip tooling
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# CPU/GPU-aware PyTorch install:
-# - aarch64 → CPU wheels
-# - x86_64  → CUDA 12.1 wheels
-RUN if [ "$(uname -m)" = "aarch64" ]; then \
-      pip install --no-cache-dir \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu ; \
+# Install torch + vLLM pinned to 0.11.*
+# - CPU wheels:  https://download.pytorch.org/whl/cpu
+# - CUDA 12.1:   https://download.pytorch.org/whl/cu121
+RUN if [ "${ACCELERATOR}" = "cuda" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+        torch==${TORCH_VERSION}+cu121 torchvision torchaudio ; \
     else \
-      pip install --no-cache-dir \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu121 ; \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+        torch==${TORCH_VERSION}+cpu torchvision torchaudio ; \
     fi
 
-# vLLM + runtime deps (from plain PyPI)
 RUN pip install --no-cache-dir \
       "vllm==${VLLM_VERSION}" \
-      fastapi \
-      "uvicorn[standard]" \
-      transformers \
-      sentencepiece \
-      huggingface_hub
+      "huggingface_hub>=0.24.0" \
+      "requests" \
+      "hf-transfer"
 
+# Helpful: show versions at build time
+RUN python -c "import vllm, torch; print('vllm', vllm.__version__, 'torch', torch.__version__)"
 
 # =============================================================================
-# Stage 2: Runtime – RHEL 9 bootc base
+# Stage 2: Final – bootc base, systemd units + venv
 # =============================================================================
-FROM registry.redhat.io/rhel9/rhel-bootc:latest
+FROM registry.access.redhat.com/ubi9/ubi-bootc:latest
 
-# Install tools needed at runtime (for HF downloads etc.)
-# NOTE: python3.11 is required because the venv’s python3.11 points to /usr/bin/python3.11
+# Install runtime deps (bootc expects rpm-ostree)
 RUN rpm-ostree install \
-      git \
-      ca-certificates \
-      curl \
-      openssl \
-      python3.11 \
-    && rpm-ostree cleanup -m
+      bash coreutils findutils procps-ng which jq \
+      python3.11 shadow-utils \
+  && rpm-ostree cleanup -m
 
-# Copy pre-built venv into final image
+# Create app user and dirs
+RUN useradd -m -d /opt/rhoim -u 1001 rhoim \
+ && mkdir -p /opt/rhoim/bin /opt/rhoim/models /etc/sysconfig \
+ && chown -R rhoim:rhoim /opt/rhoim
+
+# Copy venv from builder
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
-# Ensure the venv has python3.11 in place (pip shebang expects it)
-RUN if [ ! -e /opt/vllm-venv/bin/python3.11 ]; then \
-      ln -s /usr/bin/python3.11 /opt/vllm-venv/bin/python3.11; \
-    fi
+# Copy your entrypoint
+COPY initializer-entrypoint.sh /opt/rhoim/bin/initializer-entrypoint.sh
+RUN chmod +x /opt/rhoim/bin/initializer-entrypoint.sh
 
-# Fix Python SSL/TLS configuration for RHEL9 bootc environment
-RUN /opt/vllm-venv/bin/pip install --no-cache-dir --upgrade certifi && \
-    echo "import ssl; ssl._create_default_context = ssl.create_default_context" \
-      > /opt/vllm-venv/lib/python3.11/site-packages/fix_ssl.pth
+# Copy systemd unit (adjust path if your repo differs)
+# If your unit file is already in the repo, keep the same path here.
+COPY deploy/bootc/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
 
-# 🔧 Verify python3.11 exists and huggingface-cli exists
-RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ]; then \
-      echo "ERROR: python3.11 is missing/not executable" >&2; \
-      ls -la /opt/vllm-venv/bin >&2 || true; \
-      exit 1; \
-    fi && \
-    if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
-      echo "WARN: huggingface-cli not found in venv"; \
-    fi
+# Make sure systemd can execute it
+RUN systemctl enable rhoim-vllm.service
 
-# Optionally make venv first on PATH (nice but not strictly required)
-ENV PATH="/opt/vllm-venv/bin:${PATH}" \
-    PYTHONUNBUFFERED=1 \
-    REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
-    SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
-    CURL_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
-
-# Copy /etc contents in one go (sysconfig, systemd units, sysusers)
-COPY etc/ /etc/
-
-# Initializer script and SSL test utility
-COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
-COPY vllm/test-python-ssl.sh /usr/local/bin/test-python-ssl.sh
-
-RUN chmod +x /usr/local/bin/initializer-entrypoint.sh \
-    && chmod +x /usr/local/bin/test-python-ssl.sh \
-    # Create rhoim user via systemd-sysusers
-    && systemd-sysusers \
-    # Create RHOIM layout and assign ownership to rhoim
-    && mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models \
-    && chown -R rhoim:rhoim /opt/rhoim /tmp/models \
-    # Enable the vLLM service
-    && systemctl enable rhoim-vllm.service
-
-# vLLM listens here (still helpful when running as a plain container)
 EXPOSE 8000
 
-# Mark as bootc-compatible
 LABEL org.osbuild.bootc=true \
       bootc=true
 
-# Final bootc lint step
 RUN bootc container lint
 
-# Bootc images must run systemd as PID 1
 CMD ["/sbin/init"]
