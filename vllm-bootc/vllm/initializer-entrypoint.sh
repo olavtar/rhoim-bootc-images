@@ -1,35 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# RHOIM initializer-entrypoint.sh
-# - Loads env overrides from /etc/sysconfig/rhoim
-# - Ensures we actually use the venv (PATH + VIRTUAL_ENV)
-# - Downloads model if missing (prefers `hf`, falls back to `huggingface-cli`)
-# - Selects GPU if available (or forced), otherwise CPU
-# - Adds "worker stuff" / CPU safety knobs to avoid known vLLM CPU worker crashes
-#   (block_size=None -> NoneType * int) and reduce swap-space warnings.
-# ------------------------------------------------------------------------------
-
 if [ -f "/etc/sysconfig/rhoim" ]; then
   # shellcheck disable=SC1091
   source /etc/sysconfig/rhoim
 fi
 
-# ---- Force venv to be used (not "activated", but equivalent for runtime) -------
+# Force venv usage
 VENV_DIR="${VENV_DIR:-/opt/vllm-venv}"
 export VIRTUAL_ENV="${VENV_DIR}"
 export PATH="${VENV_DIR}/bin:${PATH}"
 export PYTHONUNBUFFERED=1
 
-# Prefer python3.11 if present
 if [ -x "${VENV_DIR}/bin/python3.11" ]; then
   PYTHON_CMD="${VENV_DIR}/bin/python3.11"
 else
   PYTHON_CMD="${VENV_DIR}/bin/python"
 fi
 
-# ---- Config -------------------------------------------------------------------
 VLLM_MODEL="${VLLM_MODEL:-${MODEL_ID:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}}"
 HOST="${HOST:-${VLLM_HOST:-0.0.0.0}}"
 PORT="${PORT:-${VLLM_PORT:-8000}}"
@@ -38,40 +26,15 @@ DTYPE="${DTYPE:-float32}"
 VLLM_DEVICE_TYPE="${VLLM_DEVICE_TYPE:-auto}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
-# CPU “worker stuff” / safety knobs (env-overridable)
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
-VLLM_BLOCK_SIZE="${VLLM_BLOCK_SIZE:-16}"     # Avoid block_size=None issues
-VLLM_SWAP_SPACE="${VLLM_SWAP_SPACE:-1}"      # GiB; reduce “too large swap space” warning
+VLLM_BLOCK_SIZE="${VLLM_BLOCK_SIZE:-16}"
+VLLM_SWAP_SPACE="${VLLM_SWAP_SPACE:-1}"     # GiB
 VLLM_CPU_OFFLOAD_GB="${VLLM_CPU_OFFLOAD_GB:-0}"
 
-# ---- Helpers ------------------------------------------------------------------
 have_gpu() {
   command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
 }
 
-is_port_free() {
-  local p="$1"
-  ! (ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}\$") \
-    && ! (netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}\$") \
-    && ! (lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk '{print $9}' | grep -qE "[:.]${p}\$")
-}
-
-pick_free_port() {
-  local p="$1"
-  local tries=20
-  while [ "${tries}" -gt 0 ]; do
-    if is_port_free "${p}"; then
-      echo "${p}"
-      return 0
-    fi
-    p=$((p+1))
-    tries=$((tries-1))
-  done
-  echo "[RHOIM] ERROR: could not find a free port starting at ${PORT}" >&2
-  exit 1
-}
-
-# ---- Device selection ----------------------------------------------------------
 DEVICE="cpu"
 if [[ "${VLLM_DEVICE_TYPE}" == "cuda" ]]; then
   DEVICE="cuda"
@@ -86,11 +49,9 @@ echo "[RHOIM] MODEL_PATH=${MODEL_PATH}"
 echo "[RHOIM] Requested VLLM_DEVICE_TYPE=${VLLM_DEVICE_TYPE}, selected DEVICE=${DEVICE}"
 echo "[RHOIM] CPU knobs: MAX_MODEL_LEN=${MAX_MODEL_LEN} VLLM_BLOCK_SIZE=${VLLM_BLOCK_SIZE} VLLM_SWAP_SPACE=${VLLM_SWAP_SPACE}GiB"
 
-# ---- Quick sanity: show vLLM + torch versions (useful in journald) -------------
 "${PYTHON_CMD}" -c "import sys; print('[RHOIM] python=', sys.executable);"
 "${PYTHON_CMD}" -c "import vllm, torch; print('[RHOIM] vllm=', getattr(vllm,'__version__','?'), 'torch=', getattr(torch,'__version__','?'))" || true
 
-# ---- SSL sanity check ----------------------------------------------------------
 echo "[RHOIM] Testing Python SSL configuration..."
 "${PYTHON_CMD}" -c "
 import requests, os
@@ -100,7 +61,6 @@ resp = requests.get('https://huggingface.co', timeout=10)
 print(f'[RHOIM] SSL test successful: HTTP {resp.status_code}')
 "
 
-# ---- Model download ------------------------------------------------------------
 mkdir -p "${MODEL_PATH}"
 LOCAL_MODEL_DIR="${MODEL_PATH}/${VLLM_MODEL}"
 
@@ -111,12 +71,11 @@ if [ ! -d "${LOCAL_MODEL_DIR}" ] || [ -z "$(ls -A "${LOCAL_MODEL_DIR}" 2>/dev/nu
   export SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
   export CURL_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
-  # Prefer `hf` (new CLI), fallback to `huggingface-cli`
   if command -v hf >/dev/null 2>&1; then
+    # `hf download` exists, but flags differ by version; keep it minimal.
     echo "[RHOIM] Running: hf download ${VLLM_MODEL}"
     hf download "${VLLM_MODEL}" \
-      --local-dir "${LOCAL_MODEL_DIR}" \
-      --local-dir-use-symlinks False
+      --local-dir "${LOCAL_MODEL_DIR}"
   else
     HF_CLI="${VENV_DIR}/bin/huggingface-cli"
     if [ ! -x "${HF_CLI}" ]; then
@@ -127,6 +86,7 @@ if [ ! -d "${LOCAL_MODEL_DIR}" ] || [ -z "$(ls -A "${LOCAL_MODEL_DIR}" 2>/dev/nu
         exit 1
       fi
     fi
+
     echo "[RHOIM] Running: ${HF_CLI} download ${VLLM_MODEL}"
     "${HF_CLI}" download "${VLLM_MODEL}" \
       --local-dir "${LOCAL_MODEL_DIR}" \
@@ -134,11 +94,6 @@ if [ ! -d "${LOCAL_MODEL_DIR}" ] || [ -z "$(ls -A "${LOCAL_MODEL_DIR}" 2>/dev/nu
   fi
 fi
 
-# ---- Port selection (avoid vLLM auto-bumping inside and confusing systemd) -----
-PORT="$(pick_free_port "${PORT}")"
-echo "[RHOIM] Selected free PORT=${PORT}"
-
-# ---- Build args ----------------------------------------------------------------
 ARGS=(
   --model "${LOCAL_MODEL_DIR}"
   --host "${HOST}"
@@ -150,13 +105,6 @@ if [[ "${DEVICE}" == "cuda" ]]; then
   ARGS+=(--device cuda)
 else
   echo "[RHOIM] Starting vLLM in CPU mode"
-
-  # CPU “worker stuff”:
-  # - Force CPUWorker
-  # - Disable async output proc
-  # - Disable frontend multiprocessing
-  # - Force a non-null block size (avoids NoneType * int crash you’re seeing)
-  # - Keep swap-space sane for small VMs
   ARGS+=(
     --device cpu
     --dtype "${DTYPE}"
@@ -169,7 +117,6 @@ else
     --disable-frontend-multiprocessing
     --worker-cls vllm.worker.cpu_worker.CPUWorker
   )
-
   export CUDA_VISIBLE_DEVICES=""
   export VLLM_NO_CUDA=1
   export VLLM_TARGET_DEVICE=cpu
