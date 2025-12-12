@@ -45,7 +45,7 @@ RUN python -c "import vllm, torch; print('vllm', vllm.__version__, 'torch', torc
 # =============================================================================
 # Stage 2: Final – bootc base, systemd units + venv
 # =============================================================================
-FROM registry.access.redhat.com/ubi9/ubi-bootc:latest
+FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Install runtime deps (bootc expects rpm-ostree)
 RUN rpm-ostree install \
