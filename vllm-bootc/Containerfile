@@ -52,30 +52,21 @@ RUN pip install --no-cache-dir \
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Install tools needed at runtime (for HF downloads etc.)
+# NOTE: python3.11 is required because the venv’s python3.11 points to /usr/bin/python3.11
 RUN rpm-ostree install \
       git \
       ca-certificates \
       curl \
       openssl \
+      python3.11 \
     && rpm-ostree cleanup -m
 
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
-# -----------------------------------------------------------------------------
-# IMPORTANT: pip inside the venv may have a shebang pointing at python3.11.
-# Ensure /opt/vllm-venv/bin/python3.11 exists BEFORE running any venv pip.
-# -----------------------------------------------------------------------------
+# Ensure the venv has python3.11 in place (pip shebang expects it)
 RUN if [ ! -e /opt/vllm-venv/bin/python3.11 ]; then \
-      if [ -x /opt/vllm-venv/bin/python ]; then \
-        ln -s python /opt/vllm-venv/bin/python3.11; \
-      elif [ -x /opt/vllm-venv/bin/python3 ]; then \
-        ln -s python3 /opt/vllm-venv/bin/python3.11; \
-      else \
-        echo "ERROR: No python executable found in /opt/vllm-venv/bin" >&2; \
-        ls -la /opt/vllm-venv/bin >&2 || true; \
-        exit 1; \
-      fi; \
+      ln -s /usr/bin/python3.11 /opt/vllm-venv/bin/python3.11; \
     fi
 
 # Fix Python SSL/TLS configuration for RHEL9 bootc environment
@@ -86,6 +77,7 @@ RUN /opt/vllm-venv/bin/pip install --no-cache-dir --upgrade certifi && \
 # 🔧 Verify python3.11 exists and huggingface-cli exists
 RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ]; then \
       echo "ERROR: python3.11 is missing/not executable" >&2; \
+      ls -la /opt/vllm-venv/bin >&2 || true; \
       exit 1; \
     fi && \
     if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
