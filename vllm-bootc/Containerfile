@@ -12,7 +12,7 @@ RUN dnf -y install \
       python${PYTHON_VERSION}-pip \
       git jq which procps-ng \
   && dnf clean all
-  
+
 # Create vLLM venv
 RUN python${PYTHON_VERSION} -m venv /opt/vllm-venv
 
@@ -62,18 +62,30 @@ RUN rpm-ostree install \
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
+# -----------------------------------------------------------------------------
+# IMPORTANT: pip inside the venv may have a shebang pointing at python3.11.
+# Ensure /opt/vllm-venv/bin/python3.11 exists BEFORE running any venv pip.
+# -----------------------------------------------------------------------------
+RUN if [ ! -e /opt/vllm-venv/bin/python3.11 ]; then \
+      if [ -x /opt/vllm-venv/bin/python ]; then \
+        ln -s python /opt/vllm-venv/bin/python3.11; \
+      elif [ -x /opt/vllm-venv/bin/python3 ]; then \
+        ln -s python3 /opt/vllm-venv/bin/python3.11; \
+      else \
+        echo "ERROR: No python executable found in /opt/vllm-venv/bin" >&2; \
+        ls -la /opt/vllm-venv/bin >&2 || true; \
+        exit 1; \
+      fi; \
+    fi
+
 # Fix Python SSL/TLS configuration for RHEL9 bootc environment
 RUN /opt/vllm-venv/bin/pip install --no-cache-dir --upgrade certifi && \
-    echo "import ssl; ssl._create_default_context = ssl.create_default_context" > /opt/vllm-venv/lib/python3.11/site-packages/fix_ssl.pth
+    echo "import ssl; ssl._create_default_context = ssl.create_default_context" \
+      > /opt/vllm-venv/lib/python3.11/site-packages/fix_ssl.pth
 
-# Fix venv python: ensure /opt/vllm-venv/bin/python3.11 works
-RUN rm -f /opt/vllm-venv/bin/python3.11 && \
-    printf '#!/bin/sh\nexec "$(dirname "$0")/python" "$@"\n' > /opt/vllm-venv/bin/python3.11 && \
-    chmod +x /opt/vllm-venv/bin/python3.11
-
-# 🔧 Verify python3.11 wrapper works and huggingface-cli exists
+# 🔧 Verify python3.11 exists and huggingface-cli exists
 RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ]; then \
-      echo "ERROR: python3.11 wrapper not created properly" >&2; \
+      echo "ERROR: python3.11 is missing/not executable" >&2; \
       exit 1; \
     fi && \
     if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
