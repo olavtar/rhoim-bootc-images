@@ -8,6 +8,8 @@ ARG VLLM_VERSION=0.11.*
 ARG ACCELERATOR=cpu   # cpu | cuda
 ARG TORCH_VERSION=2.5.1
 
+SHELL ["/bin/bash", "-c"]
+
 RUN dnf -y install \
       python${PYTHON_VERSION} \
       python${PYTHON_VERSION}-pip \
@@ -16,16 +18,15 @@ RUN dnf -y install \
 
 # Create venv
 RUN python${PYTHON_VERSION} -m venv /opt/vllm-venv
+
 ENV PATH="/opt/vllm-venv/bin:${PATH}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install torch + vLLM pinned to 0.11.*
-# - CPU wheels:  https://download.pytorch.org/whl/cpu
-# - CUDA 12.1:   https://download.pytorch.org/whl/cu121
-RUN if [ "${ACCELERATOR}" = "cuda" ]; then \
+# Install torch (CPU or CUDA) + vLLM
+RUN if [[ "${ACCELERATOR}" == "cuda" ]]; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
         torch==${TORCH_VERSION}+cu121 torchvision torchaudio ; \
     else \
@@ -39,7 +40,7 @@ RUN pip install --no-cache-dir \
       "requests" \
       "hf-transfer"
 
-# Helpful: show versions at build time
+# Build-time sanity check
 RUN python -c "import vllm, torch; print('vllm', vllm.__version__, 'torch', torch.__version__)"
 
 # =============================================================================
@@ -47,30 +48,42 @@ RUN python -c "import vllm, torch; print('vllm', vllm.__version__, 'torch', torc
 # =============================================================================
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
-# Install runtime deps (bootc expects rpm-ostree)
+SHELL ["/bin/bash", "-c"]
+
+# Runtime deps (rpm-ostree for bootc)
 RUN rpm-ostree install \
       bash coreutils findutils procps-ng which jq \
       python3.11 shadow-utils \
   && rpm-ostree cleanup -m
 
-# Create app user and dirs
-RUN useradd -m -d /opt/rhoim -u 1001 rhoim \
- && mkdir -p /opt/rhoim/bin /opt/rhoim/models /etc/sysconfig \
- && chown -R rhoim:rhoim /opt/rhoim
+# Ensure runtime dirs exist (ownership fixed at boot by sysusers/tmpfiles)
+RUN mkdir -p /opt/rhoim/bin /opt/rhoim/models
+
+# venv first on PATH at runtime
+ENV PATH="/opt/vllm-venv/bin:${PATH}" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1
 
 # Copy venv from builder
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
-# Copy your entrypoint
+# Entry point
 COPY vllm/initializer-entrypoint.sh /opt/rhoim/bin/initializer-entrypoint.sh
-RUN chmod +x /opt/rhoim/bin/initializer-entrypoint.sh
+RUN chmod 0755 /opt/rhoim/bin/initializer-entrypoint.sh
 
-# Copy systemd unit (adjust path if your repo differs)
-# If your unit file is already in the repo, keep the same path here.
-COPY deploy/bootc/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
+# sysusers (creates rhoim user at first boot)
+COPY etc/sysusers.d/rhoim.conf /etc/sysusers.d/rhoim.conf
 
-# Make sure systemd can execute it
-RUN systemctl enable rhoim-vllm.service
+# sysconfig
+COPY etc/sysconfig/rhoim /etc/sysconfig/rhoim
+
+# systemd service
+COPY etc/systemd/system/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service
+
+# Enable service without systemctl (safe for image builds)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
+ && ln -sf ../rhoim-vllm.service \
+    /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service
 
 EXPOSE 8000
 
