@@ -52,33 +52,46 @@ RUN pip install --no-cache-dir \
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
 # Install tools needed at runtime (for HF downloads etc.)
-RUN rpm-ostree install git ca-certificates curl && \
+RUN rpm-ostree install git ca-certificates curl python3.11-devel openssl-devel && \
     rpm-ostree cleanup -m
 
 # Copy pre-built venv into final image
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
+
+# Fix Python SSL/TLS configuration for RHEL9 bootc environment
+RUN /opt/vllm-venv/bin/pip install --no-cache-dir --upgrade certifi && \
+    echo "import ssl; ssl._create_default_context = ssl.create_default_context" > /opt/vllm-venv/lib/python3.11/site-packages/fix_ssl.pth
 
 # Fix venv python: ensure /opt/vllm-venv/bin/python3.11 works
 RUN rm -f /opt/vllm-venv/bin/python3.11 && \
     printf '#!/bin/sh\nexec "$(dirname "$0")/python" "$@"\n' > /opt/vllm-venv/bin/python3.11 && \
     chmod +x /opt/vllm-venv/bin/python3.11
 
-# 🔧 Ensure python3.11 exists in the venv for huggingface-cli shebang
-RUN if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
+# 🔧 Verify python3.11 wrapper works and huggingface-cli exists
+RUN if [ ! -x /opt/vllm-venv/bin/python3.11 ]; then \
+      echo "ERROR: python3.11 wrapper not created properly" >&2; \
+      exit 1; \
+    fi && \
+    if [ ! -x /opt/vllm-venv/bin/huggingface-cli ]; then \
       echo "WARN: huggingface-cli not found in venv"; \
     fi
 
 # Optionally make venv first on PATH (nice but not strictly required)
 ENV PATH="/opt/vllm-venv/bin:${PATH}" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+    SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem \
+    CURL_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
 # Copy /etc contents in one go (sysconfig, systemd units, sysusers)
 COPY etc/ /etc/
 
-# Initializer script
+# Initializer script and SSL test utility
 COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
+COPY vllm/test-python-ssl.sh /usr/local/bin/test-python-ssl.sh
 
 RUN chmod +x /usr/local/bin/initializer-entrypoint.sh \
+    && chmod +x /usr/local/bin/test-python-ssl.sh \
     # Create rhoim user via systemd-sysusers
     && systemd-sysusers \
     # Create RHOIM layout and assign ownership to rhoim

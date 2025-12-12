@@ -33,6 +33,21 @@ echo "[RHOIM] HOST=${HOST} PORT=${PORT}"
 echo "[RHOIM] MODEL_PATH=${MODEL_PATH}"
 echo "[RHOIM] Requested VLLM_DEVICE_TYPE=${VLLM_DEVICE_TYPE}, selected DEVICE=${DEVICE}"
 
+# Test Python SSL configuration before downloads
+echo "[RHOIM] Testing Python SSL configuration..."
+/opt/vllm-venv/bin/python -c "
+import ssl, requests, os
+# Ensure we use system CA certificates
+os.environ['REQUESTS_CA_BUNDLE'] = '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'
+os.environ['SSL_CERT_FILE'] = '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem'
+try:
+    resp = requests.get('https://huggingface.co', timeout=10)
+    print(f'[RHOIM] SSL test successful: HTTP {resp.status_code}')
+except Exception as e:
+    print(f'[RHOIM] ERROR: SSL test failed: {e}')
+    exit(1)
+"
+
 # 4. Ensure model is present
 mkdir -p "${MODEL_PATH}"
 LOCAL_MODEL_DIR="${MODEL_PATH}/${VLLM_MODEL}"
@@ -51,6 +66,12 @@ if [ ! -d "${LOCAL_MODEL_DIR}" ] || [ -z "$(ls -A "${LOCAL_MODEL_DIR}" 2>/dev/nu
         fi
     fi
 
+    # Set SSL environment variables for huggingface-cli
+    export REQUESTS_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+    export SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+    export CURL_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+    
+    echo "[RHOIM] Running: ${HF_CLI} download ${VLLM_MODEL}"
     "${HF_CLI}" download "${VLLM_MODEL}" \
         --local-dir "${LOCAL_MODEL_DIR}" \
         --local-dir-use-symlinks False
