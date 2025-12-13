@@ -26,7 +26,7 @@ Environment=SSL_CERT_FILE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 Environment=CURL_CA_BUNDLE=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
 
 # Do NOT set CPU-only envs here; let the script choose based on VLLM_DEVICE_TYPE
-ExecStart=/usr/local/bin/initializer-entrypoint.sh
+ExecStart=/opt/rhoim/bin/initializer-entrypoint.sh
 
 StandardOutput=journal+console
 StandardError=journal+console
