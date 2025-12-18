@@ -30,7 +30,21 @@ VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 
 # 3. GPU detection
 have_gpu() {
-    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1
+    # 1) Best signal: NVIDIA device nodes are present inside the container
+    if ls /dev/nvidiactl /dev/nvidia0 >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # 2) If nvidia-smi exists and works, also good
+    if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # 3) Last resort: ask torch (only works if torch is CUDA build and GPU is visible)
+    /opt/vllm-venv/bin/python - <<'PY' >/dev/null 2>&1
+import torch
+raise SystemExit(0 if (torch.version.cuda is not None and torch.cuda.is_available()) else 1)
+PY
 }
 
 DEVICE="cpu"

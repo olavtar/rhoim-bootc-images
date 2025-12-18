@@ -32,42 +32,59 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # CPU/GPU-aware PyTorch install:
 # - aarch64 → CPU wheels
-# - x86_64  → CUDA 12.1 wheels
+# - x86_64  → CUDA 12.1 wheels (explicit +cu121 so we never accidentally get CPU-only from PyPI)
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
       pip install --no-cache-dir \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu ; \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision torchaudio ; \
     else \
       pip install --no-cache-dir \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu121 ; \
+        --index-url https://download.pytorch.org/whl/cu121 \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.6.0+cu121 torchvision==0.21.0+cu121 torchaudio==2.6.0+cu121 ; \
     fi
 
-# vLLM installation: Build from source for both architectures (NO SUBSCRIPTION REQUIRED)
-# Build from source for consistency and to avoid subscription requirements
-# Both architectures build with CPU support (can use CUDA at runtime if available)
-RUN git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git /tmp/vllm-src || \
-    (echo "Branch v${VLLM_VERSION} not found, using main branch..." && \
-     git clone --depth 1 https://github.com/vllm-project/vllm.git /tmp/vllm-src) && \
-    cd /tmp/vllm-src && \
-    pip install --no-cache-dir -r requirements/build.txt && \
-    pip install --no-cache-dir -r requirements/cpu.txt && \
-    # Handle NUMA: remove -lnuma from CMakeLists.txt and create stub if needed
-    # This works for both architectures and prevents linker errors
-    find . -type f \( -name "*.py" -o -name "CMakeLists.txt" -o -name "*.cmake" \) -exec sed -i 's/-lnuma//g' {} + 2>/dev/null || true && \
-    mkdir -p /tmp/numa_stub && \
-    printf '#include <stdlib.h>\nint numa_available(void) { return -1; }\nvoid* numa_alloc_onnode(size_t size, int node) { return malloc(size); }\nvoid numa_free(void *start, size_t size) { free(start); }\nint numa_node_of_cpu(int cpu) { return 0; }\nvoid numa_run_on_node(int node) {}\n' > /tmp/numa_stub/numa_stub.c && \
-    gcc -shared -fPIC -o /tmp/numa_stub/libnuma.so /tmp/numa_stub/numa_stub.c 2>/dev/null || true && \
-    CC=/usr/bin/gcc \
-    CXX=/usr/bin/g++ \
-    CXXFLAGS="-Wno-error -Wno-psabi -DVLLM_NUMA_DISABLED" \
-    LDFLAGS="-Wl,--as-needed -L/tmp/numa_stub" \
-    CMAKE_BUILD_PARALLEL_LEVEL=1 \
-    MAX_JOBS=1 \
-    SETUPTOOLS_SCM_PRETEND_VERSION=${VLLM_VERSION} \
-    VLLM_TARGET_DEVICE=cpu \
-    pip install --no-cache-dir . --no-build-isolation && \
-    rm -rf /tmp/vllm-src /tmp/numa_stub
+# Verify torch is actually CUDA-capable on x86_64
+RUN python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("torch.version.cuda:", torch.version.cuda)
+PY
+
+# vLLM installation:
+# - aarch64 → build from source CPU-only (no CUDA on arm64 here)
+# - x86_64  → install vLLM wheel (GPU-capable)
+RUN if [ "$(uname -m)" = "aarch64" ]; then \
+      git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git /tmp/vllm-src || \
+        (echo "Branch v${VLLM_VERSION} not found, using main branch..." && git clone --depth 1 https://github.com/vllm-project/vllm.git /tmp/vllm-src) && \
+      cd /tmp/vllm-src && \
+      pip install --no-cache-dir -r requirements/build.txt && \
+      pip install --no-cache-dir -r requirements/cpu.txt && \
+      find . -type f \( -name "*.py" -o -name "CMakeLists.txt" -o -name "*.cmake" \) -exec sed -i 's/-lnuma//g' {} + 2>/dev/null || true && \
+      mkdir -p /tmp/numa_stub && \
+      printf '#include <stdlib.h>\nint numa_available(void) { return -1; }\nvoid* numa_alloc_onnode(size_t size, int node) { return malloc(size); }\nvoid numa_free(void *start, size_t size) { free(start); }\nint numa_node_of_cpu(int cpu) { return 0; }\nvoid numa_run_on_node(int node) {}\n' > /tmp/numa_stub/numa_stub.c && \
+      gcc -shared -fPIC -o /tmp/numa_stub/libnuma.so /tmp/numa_stub/numa_stub.c 2>/dev/null || true && \
+      CC=/usr/bin/gcc \
+      CXX=/usr/bin/g++ \
+      CXXFLAGS="-Wno-error -Wno-psabi -DVLLM_NUMA_DISABLED" \
+      LDFLAGS="-Wl,--as-needed -L/tmp/numa_stub" \
+      CMAKE_BUILD_PARALLEL_LEVEL=1 \
+      MAX_JOBS=1 \
+      SETUPTOOLS_SCM_PRETEND_VERSION=${VLLM_VERSION} \
+      VLLM_TARGET_DEVICE=cpu \
+      pip install --no-cache-dir . --no-build-isolation && \
+      rm -rf /tmp/vllm-src /tmp/numa_stub ; \
+    else \
+      pip install --no-cache-dir \
+        --extra-index-url https://pypi.org/simple \
+        vllm==${VLLM_VERSION} ; \
+    fi
+
+# Verify vLLM import
+RUN python - <<'PY'
+import vllm
+print("vllm:", vllm.__version__)
+PY
 
 # Runtime deps (common for both architectures)
 RUN pip install --no-cache-dir \
