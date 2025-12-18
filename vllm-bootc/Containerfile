@@ -41,7 +41,7 @@ RUN if [ "$(uname -m)" = "aarch64" ]; then \
       pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu121 \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0+cu121 torchvision==0.21.0+cu121 torchaudio==2.6.0+cu121 ; \
+        torch==2.5.1+cu121 torchvision==0.20.1+cu121 torchaudio==2.5.1+cu121 ; \
     fi
 
 # Verify torch is actually CUDA-capable on x86_64
