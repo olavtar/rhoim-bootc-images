@@ -1,41 +1,31 @@
 # =============================================================================
-# Stage 1: Builder – UBI9, build venv with vLLM + deps (NO SUBSCRIPTION REQUIRED)
+# Stage 1: Builder – UBI9, build venv with GPU torch + vLLM
 # =============================================================================
 FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
 
-ARG PYTHON_VERSION=3.11
+ARG PYTHON_VERSION=3.9
 ARG VLLM_VERSION=0.10.2
 
-# ---------------------------------------------------------------------------
-# Build-time deps only
-# ---------------------------------------------------------------------------
+# ---- Build dependencies ----
 RUN dnf -y install \
-      python3.11 \
-      python3.11-pip \
-      python3.11-devel \
+      python3 \
+      python3-pip \
+      python3-devel \
       gcc gcc-c++ \
-      cmake ninja-build \
-      make \
+      cmake ninja-build make \
       git jq which procps-ng \
       numactl-devel \
     && dnf clean all
 
-# ---------------------------------------------------------------------------
-# Create venv (Python 3.11)
-# ---------------------------------------------------------------------------
-RUN python3.11 -m venv /opt/vllm-venv
-
+# ---- Create venv ----
+RUN python3 -m venv /opt/vllm-venv
 ENV PATH="/opt/vllm-venv/bin:${PATH}" \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# ---------------------------------------------------------------------------
-# CPU/GPU-aware PyTorch install
-#   - aarch64 → CPU
-#   - x86_64  → CUDA 12.1
-# ---------------------------------------------------------------------------
+# ---- Install pinned GPU torch (x86_64) / CPU torch (aarch64) ----
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
       pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
@@ -48,50 +38,36 @@ RUN if [ "$(uname -m)" = "aarch64" ]; then \
         torchaudio==2.5.1+cu121 ; \
     fi
 
-# ---------------------------------------------------------------------------
-# HARD FAIL if CUDA torch is missing on x86_64
-# ---------------------------------------------------------------------------
+# ---- Verify torch (hard fail if wrong) ----
 RUN python - <<'PY'
-import platform, torch
+import torch, sys
 print("torch:", torch.__version__)
-print("torch.version.cuda:", torch.version.cuda)
-if platform.machine() == "x86_64" and torch.version.cuda is None:
-    raise SystemExit("ERROR: CUDA torch expected on x86_64, got CPU-only torch")
+print("cuda:", torch.version.cuda)
+if torch.version.cuda is None:
+    sys.exit("ERROR: CUDA torch not installed")
 PY
 
-# ---------------------------------------------------------------------------
-# vLLM install
-#   - aarch64 → source build (CPU-only)
-#   - x86_64  → wheel (GPU-capable if available for this combo)
-# ---------------------------------------------------------------------------
+# ---- Install vLLM ----
+# arm64 → build CPU-only
+# x86_64 → GPU wheel
 RUN if [ "$(uname -m)" = "aarch64" ]; then \
-      git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git /tmp/vllm-src || \
-        git clone --depth 1 https://github.com/vllm-project/vllm.git /tmp/vllm-src && \
-      cd /tmp/vllm-src && \
+      git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git /tmp/vllm && \
+      cd /tmp/vllm && \
       pip install --no-cache-dir -r requirements/build.txt && \
       pip install --no-cache-dir -r requirements/cpu.txt && \
-      find . -type f \( -name "*.py" -o -name "CMakeLists.txt" -o -name "*.cmake" \) \
-        -exec sed -i 's/-lnuma//g' {} + 2>/dev/null || true && \
-      mkdir -p /tmp/numa_stub && \
-      printf '#include <stdlib.h>\nint numa_available(void){return -1;}\nvoid* numa_alloc_onnode(size_t s,int n){return malloc(s);}void numa_free(void*p,size_t s){free(p);}int numa_node_of_cpu(int c){return 0;}void numa_run_on_node(int n){}\n' \
-        > /tmp/numa_stub/numa_stub.c && \
-      gcc -shared -fPIC -o /tmp/numa_stub/libnuma.so /tmp/numa_stub/numa_stub.c && \
-      VLLM_TARGET_DEVICE=cpu pip install --no-cache-dir . --no-build-isolation && \
-      rm -rf /tmp/vllm-src /tmp/numa_stub ; \
+      VLLM_TARGET_DEVICE=cpu pip install --no-cache-dir . && \
+      rm -rf /tmp/vllm ; \
     else \
       pip install --no-cache-dir vllm==${VLLM_VERSION} ; \
     fi
 
-# ---------------------------------------------------------------------------
-# Verify imports
-# ---------------------------------------------------------------------------
+# ---- Verify vLLM ----
 RUN python - <<'PY'
-import torch, vllm
-print("torch:", torch.__version__, "cuda:", torch.version.cuda)
+import vllm
 print("vllm:", vllm.__version__)
 PY
 
-# Runtime Python deps
+# ---- Runtime deps ----
 RUN pip install --no-cache-dir \
       fastapi \
       "uvicorn[standard]" \
@@ -105,65 +81,40 @@ RUN pip install --no-cache-dir \
 # =============================================================================
 FROM registry.redhat.io/rhel9/rhel-bootc:latest
 
-ARG PYTHON_VERSION=3.11
+# ---- Runtime packages ----
+RUN dnf -y install python3 systemd && dnf clean all
 
-# Install Python 3.11 explicitly (needed because we symlink to python3.11 below)
-RUN dnf -y install \
-  python3.11 \
-  systemd \
-  && dnf clean all
-
-# Make python3 point to python3.11
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python3
-
-# Copy venv
+# ---- Copy venv ----
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
 
-# Fix venv symlinks
-RUN rm -f /opt/vllm-venv/bin/python* && \
-    ln -sf /usr/bin/python3.11 /opt/vllm-venv/bin/python && \
-    ln -sf /usr/bin/python3.11 /opt/vllm-venv/bin/python3 && \
-    ln -sf /usr/bin/python3.11 /opt/vllm-venv/bin/python3.11
+# ---- Fix venv python symlinks ----
+RUN ln -sf /usr/bin/python3 /opt/vllm-venv/bin/python && \
+    ln -sf /usr/bin/python3 /opt/vllm-venv/bin/python3
 
+# ---- Runtime environment (CRITICAL) ----
 ENV PATH="/opt/vllm-venv/bin:${PATH}" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TORCHDYNAMO_DISABLE=1 \
+    VLLM_USE_TORCH_COMPILE=0 \
+    VLLM_USE_TRITON=0
 
-# Runtime sanity check: fail fast if x86_64 image somehow became CPU-only
-RUN /opt/vllm-venv/bin/python - <<'PY'
-import platform, torch
-print("runtime torch:", torch.__version__)
-print("runtime torch.version.cuda:", torch.version.cuda)
-if platform.machine() == "x86_64" and torch.version.cuda is None:
-    raise SystemExit("ERROR: runtime has CPU-only torch on x86_64 (expected CUDA build)")
-PY
-
+# ---- RHOIM config ----
 COPY etc/ /etc/
 COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
+RUN chmod +x /usr/local/bin/initializer-entrypoint.sh
 
-# CPU-only enforcement for arm64 only
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "aarch64" ]; then \
-      awk '/^ExecStart=/ { \
-        print "Environment=CUDA_VISIBLE_DEVICES="; \
-        print "Environment=VLLM_NO_CUDA=1"; \
-        print "Environment=VLLM_CPU_ONLY=1"; \
-        print "Environment=VLLM_PLATFORM=cpu"; \
-      } 1' /etc/systemd/system/rhoim-vllm.service \
-        > /tmp/rhoim-vllm.service && \
-      mv /tmp/rhoim-vllm.service /etc/systemd/system/rhoim-vllm.service ; \
-    fi
+# ---- Users + layout ----
+RUN systemd-sysusers && \
+    mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models /sysroot && \
+    chown -R rhoim:rhoim /opt/rhoim /tmp/models && \
+    systemctl enable rhoim-vllm.service
 
-RUN chmod +x /usr/local/bin/initializer-entrypoint.sh \
-    && systemd-sysusers \
-    && mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models /sysroot \
-    && chown -R rhoim:rhoim /opt/rhoim /tmp/models \
-    && systemctl enable rhoim-vllm.service
-
+# ---- Ports ----
 EXPOSE 8000
 
-LABEL org.osbuild.bootc=true \
-      bootc=true
+# ---- bootc metadata ----
+LABEL org.osbuild.bootc=true bootc=true
 
-RUN bootc container lint || echo "Bootc lint completed with warnings"
+RUN bootc container lint || true
 
 CMD ["/sbin/init"]
