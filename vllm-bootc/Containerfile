@@ -87,10 +87,13 @@ FROM registry.redhat.io/rhel9/rhel-bootc:latest
 ARG PYTHON_VERSION=3.9
 
 # ---- Runtime packages (pin python 3.9 explicitly) ----
-RUN dnf -y install \
-      python3.9 \
-      systemd \
-    && dnf clean all
+  RUN dnf -y install \
+  python3 \
+  systemd \
+  gcc \
+  gcc-c++ \
+  python3-devel \
+&& dnf clean all
 
 # ---- Copy venv ----
 COPY --from=builder /opt/vllm-venv /opt/vllm-venv
