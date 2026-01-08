@@ -3,6 +3,9 @@
 # =============================================================================
 FROM registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
 
+# RHAIIS base image runs as non-root (USER 1001:0). We need root for RPM installs and system setup.
+USER 0
+
 # ---- Install what bootc+systemd appliance needs (keep minimal) ----
 # NOTE: Depending on the RHAIIS image contents, some of these may already exist.
 RUN dnf -y install \
@@ -26,10 +29,13 @@ COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
 RUN chmod +x /usr/local/bin/initializer-entrypoint.sh
 
 # ---- Users + layout ----
+# NOTE: `systemctl enable` can fail during container build (no running systemd).
+# For bootc/systemd images, enabling via symlink is equivalent.
 RUN systemd-sysusers && \
     mkdir -p /opt/rhoim/{bin,models,gateway} /tmp/models /sysroot && \
     chown -R rhoim:rhoim /opt/rhoim /tmp/models && \
-    systemctl enable rhoim-vllm.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    ln -sf /usr/lib/systemd/system/rhoim-vllm.service /etc/systemd/system/multi-user.target.wants/rhoim-vllm.service
 
 # ---- Verify vLLM exists in the base image (fail at build time if not) ----
 RUN python3 -c "import vllm; import torch; print('vllm OK:', vllm.__version__, '| torch:', torch.__version__)" && \
@@ -41,5 +47,8 @@ EXPOSE 8000
 LABEL org.osbuild.bootc=true bootc=true
 # If bootc is not present in the base image, do not fail the build.
 RUN command -v bootc >/dev/null 2>&1 && bootc container lint || true
+
+# Restore the base image default user (non-root, root group)
+USER 1001:0
 
 CMD ["/sbin/init"]
