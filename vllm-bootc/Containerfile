@@ -15,6 +15,9 @@ RUN dnf -y install \
       which \
     && dnf clean all
 
+# Install huggingface-cli (provided by huggingface_hub)
+RUN python3 -m pip install --no-cache-dir -U "huggingface_hub[cli]"
+
 # ---- Runtime environment (keep your safety toggles) ----
 ENV PYTHONUNBUFFERED=1 \
     TORCHDYNAMO_DISABLE=1 \
