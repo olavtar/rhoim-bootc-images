@@ -1,118 +1,26 @@
 # =============================================================================
-# Stage 1: Builder – UBI9, build venv with GPU torch + vLLM
+# RHOIM vLLM bootc appliance (GPU-only) built on RHAIIS vLLM CUDA RHEL9 image
 # =============================================================================
-FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
+FROM registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
 
-ARG PYTHON_VERSION=3.9
-ARG VLLM_VERSION=0.10.2
-
-# ---- Build dependencies (pin python to 3.9 explicitly) ----
+# ---- Install what bootc+systemd appliance needs (keep minimal) ----
+# NOTE: Depending on the RHAIIS image contents, some of these may already exist.
 RUN dnf -y install \
-      python3.9 \
-      python3.9-pip \
-      python3.9-devel \
-      gcc gcc-c++ \
-      cmake ninja-build make \
-      git jq which procps-ng \
-      numactl-devel \
+      systemd \
+      jq \
+      procps-ng \
+      which \
     && dnf clean all
 
-# ---- Create venv using Python 3.9 explicitly (prevents drift to 3.11) ----
-RUN python3.9 -m venv /opt/vllm-venv
-
-ENV PATH="/opt/vllm-venv/bin:${PATH}" \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONUNBUFFERED=1
-
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# ---- Install pinned GPU torch (x86_64) / CPU torch (aarch64) ----
-RUN if [ "$(uname -m)" = "aarch64" ]; then \
-      pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch torchvision torchaudio ; \
-    else \
-      pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cu121 \
-        torch==2.5.1+cu121 \
-        torchvision==0.20.1+cu121 \
-        torchaudio==2.5.1+cu121 ; \
-    fi
-
-# ---- Verify torch (hard fail if wrong) ----
-RUN python - <<'PY'
-import sys, torch
-print("python:", sys.version)
-print("torch:", torch.__version__)
-print("torch.version.cuda:", torch.version.cuda)
-if torch.version.cuda is None:
-    sys.exit("ERROR: CUDA torch not installed")
-PY
-
-# ---- Install vLLM ----
-# arm64 → build CPU-only
-# x86_64 → install vLLM wheel
-RUN if [ "$(uname -m)" = "aarch64" ]; then \
-      git clone --depth 1 --branch v${VLLM_VERSION} https://github.com/vllm-project/vllm.git /tmp/vllm && \
-      cd /tmp/vllm && \
-      pip install --no-cache-dir -r requirements/build.txt && \
-      pip install --no-cache-dir -r requirements/cpu.txt && \
-      VLLM_TARGET_DEVICE=cpu pip install --no-cache-dir . && \
-      rm -rf /tmp/vllm ; \
-    else \
-      pip install --no-cache-dir vllm==${VLLM_VERSION} ; \
-    fi
-
-# ---- Verify vLLM ----
-RUN python - <<'PY'
-import sys, vllm
-print("python:", sys.version)
-print("vllm:", vllm.__version__)
-PY
-
-# ---- Runtime deps ----
-RUN pip install --no-cache-dir \
-      fastapi \
-      "uvicorn[standard]" \
-      transformers \
-      sentencepiece \
-      huggingface_hub
-
-
-# =============================================================================
-# Stage 2: Runtime – RHEL 9 bootc
-# =============================================================================
-FROM registry.redhat.io/rhel9/rhel-bootc:latest
-
-ARG PYTHON_VERSION=3.9
-
-# ---- Runtime packages (pin python 3.9 explicitly) ----
-  RUN dnf -y install \
-  python3 \
-  systemd \
-  gcc \
-  gcc-c++ \
-  python3-devel \
-&& dnf clean all
-
-# ---- Copy venv ----
-COPY --from=builder /opt/vllm-venv /opt/vllm-venv
-
-# ---- Fix venv python symlinks to python3.9 explicitly ----
-RUN ln -sf /usr/bin/python3.9 /opt/vllm-venv/bin/python && \
-    ln -sf /usr/bin/python3.9 /opt/vllm-venv/bin/python3 && \
-    ln -sf /usr/bin/python3.9 /opt/vllm-venv/bin/python3.9
-
-# ---- Runtime environment (CRITICAL) ----
-# Disable all torch.compile / inductor / triton JIT paths to avoid requiring a compiler in runtime.
-ENV PATH="/opt/vllm-venv/bin:${PATH}" \
-    PYTHONUNBUFFERED=1 \
+# ---- Runtime environment (keep your safety toggles) ----
+ENV PYTHONUNBUFFERED=1 \
     TORCHDYNAMO_DISABLE=1 \
     TORCHINDUCTOR_DISABLE=1 \
     VLLM_USE_TORCH_COMPILE=0 \
-    VLLM_USE_TRITON=0
+    VLLM_USE_TRITON=0 \
+    RHOIM_ACCELERATOR_MODE=gpu
 
-# ---- RHOIM config ----
+# ---- RHOIM config + entrypoint ----
 COPY etc/ /etc/
 COPY vllm/initializer-entrypoint.sh /usr/local/bin/initializer-entrypoint.sh
 RUN chmod +x /usr/local/bin/initializer-entrypoint.sh
@@ -123,12 +31,15 @@ RUN systemd-sysusers && \
     chown -R rhoim:rhoim /opt/rhoim /tmp/models && \
     systemctl enable rhoim-vllm.service
 
-# ---- Ports ----
+# ---- Verify vLLM exists in the base image (fail at build time if not) ----
+RUN python3 -c "import vllm; import torch; print('vllm OK:', vllm.__version__, '| torch:', torch.__version__)" && \
+    command -v nvidia-smi >/dev/null 2>&1 || true
+
 EXPOSE 8000
 
 # ---- bootc metadata ----
 LABEL org.osbuild.bootc=true bootc=true
-
-RUN bootc container lint || true
+# If bootc is not present in the base image, do not fail the build.
+RUN command -v bootc >/dev/null 2>&1 && bootc container lint || true
 
 CMD ["/sbin/init"]

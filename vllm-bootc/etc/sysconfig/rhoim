@@ -1,29 +1,25 @@
-# RHOIM Environment Variables for bootc Model Serving
+# RHOIM Environment Variables for bootc Model Serving (GPU-only)
 
-# --- Core Paths and Configuration (Used by Containerfile and Initializer) ---
+# --- Core Paths and Configuration (Used by initializer) ---
 MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 MODEL_PATH="/tmp/models"
 VLLM_PORT="8000"
 VLLM_HOST="0.0.0.0"
 
-# --- VLLM/Device Configuration ---
-# Set to "cpu" for CPU mode (local testing) or "cuda" for NVIDIA GPU mode (production)
-# 
-# This can be overridden at runtime in several ways:
-# 1. Edit this file (/etc/sysconfig/rhoim) and restart the service
-# 2. Use systemd override: systemctl edit rhoim-vllm.service (add Environment="VLLM_DEVICE_TYPE=cuda")
-# 3. Set at bootc install time: bootc install --env VLLM_DEVICE_TYPE=cuda ...
+# --- GPU-only device configuration ---
+# This image is NVIDIA GPU-only. CPU mode / fallback is not supported in this variant.
+# Requirements:
+# - NVIDIA drivers on the host
+# - GPU passthrough enabled (e.g. NVIDIA Container Toolkit / CDI)
 #
-# Assumes NVIDIA GPUs only - other GPU types are not supported
-# This controls all device-related settings automatically
-# Default: try GPU if available, otherwise use CPU
-VLLM_DEVICE_TYPE="auto"
+# You may override this value, but the initializer will enforce CUDA for GPU-only images.
+VLLM_DEVICE_TYPE="cuda"
+RHOIM_ACCELERATOR_MODE="gpu"
 
-# Optional: Override specific vLLM settings if needed
-# VLLM_LOGGING_LEVEL=DEBUG
-# VLLM_USE_FLASHINFER=0
+# Optional: extra args passed directly to vLLM OpenAI API server
+VLLM_EXTRA_ARGS=""
 
-# --- Gateway/API Configuration (Used by rhoim-gateway.service) ---
+# --- Gateway/API Configuration (Used by rhoim-gateway.service, if applicable) ---
 API_KEYS="devkey1,devkey2"
-# BASE_PATH=/ # (If used by your gateway)
-# ENABLE_RHOAI_ALIAS=true # (If used by your gateway)
+# BASE_PATH=/
+# ENABLE_RHOAI_ALIAS=true

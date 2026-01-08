@@ -4,6 +4,16 @@
 
 set -euo pipefail
 
+echo "⚠️  DEPRECATED: build-vllm-from-source.sh"
+echo "    This script is no longer used by the default RHOIM build."
+echo "    RHOIM now consumes the supported RHAIIS vLLM images instead."
+echo
+echo "    This script is kept for reference only and may be removed in a future release."
+echo "    Do NOT rely on it for production builds."
+echo
+
+exit 1
+
 VLLM_VERSION="${1:-0.10.2}"
 VLLM_SRC_DIR="/tmp/vllm-src"
 NUMA_STUB_DIR="/tmp/numa_stub"

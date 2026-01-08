@@ -1,5 +1,5 @@
 [Unit]
-Description=RHOIM vLLM Model Serving Service
+Description=RHOIM vLLM Model Serving Service (GPU-only)
 After=network-online.target
 Wants=network-online.target
 
@@ -20,12 +20,19 @@ Environment=PORT=8000
 Environment=DTYPE=float32
 Environment=VLLM_EXTRA_ARGS=
 
-# Do NOT set CPU-only envs here; let the initializer script choose based on architecture
-# The initializer script sets CPU env vars early for arm64 to prevent CUDA detection
+# GPU-only defaults (initializer will enforce CUDA even if overridden)
+Environment=VLLM_DEVICE_TYPE=cuda
+Environment=RHOIM_ACCELERATOR_MODE=gpu
+
+# Fail fast if NVIDIA GPU is not visible in the container
+ExecStartPre=/usr/bin/bash -c 'test -e /dev/nvidiactl -o -e /dev/nvidia0 || { echo "[RHOIM] ERROR: No NVIDIA GPU devices found (/dev/nvidia*). This image is GPU-only."; exit 1; }'
+
+# Start vLLM via initializer (RHAIIS-based, no venv)
 ExecStart=/usr/local/bin/initializer-entrypoint.sh
 
 StandardOutput=journal+console
 StandardError=journal+console
+
 Restart=always
 RestartSec=10
 
