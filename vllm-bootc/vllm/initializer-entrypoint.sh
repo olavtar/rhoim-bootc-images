@@ -125,16 +125,25 @@ else
 fi
 
 # 5) Start vLLM OpenAI-compatible server
-# Prefer the vllm CLI provided by the RHAIIS image (avoids python module path issues).
-if ! command -v vllm >/dev/null 2>&1; then
-  err "vllm CLI not found in PATH (expected /opt/app-root/bin/vllm)."
-  exit 1
+# IMPORTANT: Don't exec `vllm` directly because its shebang may point to a different python.
+# Run the CLI script explicitly with the selected interpreter.
+VLLM_CLI="/opt/app-root/bin/vllm"
+
+if [ -x "${VLLM_CLI}" ]; then
+  exec "${PYTHON_BIN}" "${VLLM_CLI}" serve "${LOCAL_MODEL_DIR}" \
+    --host "${HOST}" \
+    --port "${PORT}" \
+    --dtype "${DTYPE}" \
+    --device "${VLLM_DEVICE_TYPE}" \
+    ${VLLM_EXTRA_ARGS}
 fi
 
-exec vllm serve "${LOCAL_MODEL_DIR}" \
+# Fallback: call the CLI module directly if the script isn't present
+exec "${PYTHON_BIN}" -m vllm.entrypoints.cli.main serve "${LOCAL_MODEL_DIR}" \
   --host "${HOST}" \
   --port "${PORT}" \
   --dtype "${DTYPE}" \
   --device "${VLLM_DEVICE_TYPE}" \
   ${VLLM_EXTRA_ARGS}
+
 
