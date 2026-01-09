@@ -2,6 +2,7 @@
 Description=RHOIM model prefetch (Hugging Face)
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=!/var/lib/rhoim/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0/config.json
 
 [Service]
 Type=oneshot
@@ -11,6 +12,4 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
-
-ConditionPathExists=!/var/lib/rhoim/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0/config.json
 
