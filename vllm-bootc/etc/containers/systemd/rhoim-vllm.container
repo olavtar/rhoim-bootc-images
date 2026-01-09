@@ -26,3 +26,6 @@ Exec=--model /models/${VLLM_MODEL} --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=2
 TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
