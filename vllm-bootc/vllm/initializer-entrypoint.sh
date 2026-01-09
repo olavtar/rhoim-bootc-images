@@ -125,11 +125,16 @@ else
 fi
 
 # 5) Start vLLM OpenAI-compatible server
-# Add any extra args via VLLM_EXTRA_ARGS in /etc/sysconfig/rhoim (or env override).
-exec "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server \
-  --model "${LOCAL_MODEL_DIR}" \
+# Prefer the vllm CLI provided by the RHAIIS image (avoids python module path issues).
+if ! command -v vllm >/dev/null 2>&1; then
+  err "vllm CLI not found in PATH (expected /opt/app-root/bin/vllm)."
+  exit 1
+fi
+
+exec vllm serve "${LOCAL_MODEL_DIR}" \
   --host "${HOST}" \
   --port "${PORT}" \
   --dtype "${DTYPE}" \
   --device "${VLLM_DEVICE_TYPE}" \
   ${VLLM_EXTRA_ARGS}
+
