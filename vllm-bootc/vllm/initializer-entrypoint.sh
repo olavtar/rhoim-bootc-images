@@ -132,45 +132,39 @@ else
 fi
 
 # 5) Start vLLM OpenAI-compatible server
-# Run the OpenAI server by absolute path to avoid module-resolution issues under systemd.
-API_SERVER="/opt/app-root/lib64/python3.12/site-packages/vllm/entrypoints/openai/api_server.py"
+# Find api_server.py dynamically (RHAIIS layout may differ), then run it.
+API_SERVER="$("${PYTHON_BIN}" - <<'PY'
+import os, pkgutil, vllm
 
-if [ ! -f "${API_SERVER}" ]; then
-  err "api_server.py not found at ${API_SERVER}"
-  err "Verify vLLM is installed in the image and the path is correct."
-  exit 1
+# Search within vllm package for the OpenAI api_server.py
+vllm_dir = os.path.dirname(vllm.__file__)
+target = None
+for root, _, files in os.walk(vllm_dir):
+    if root.endswith(os.path.join("entrypoints", "openai")) and "api_server.py" in files:
+        target = os.path.join(root, "api_server.py")
+        break
+print(target or "")
+PY
+)"
+
+if [ -n "${API_SERVER}" ] && [ -f "${API_SERVER}" ]; then
+  log "Starting vLLM OpenAI server via ${API_SERVER}"
+  exec "${PYTHON_BIN}" "${API_SERVER}" \
+    --model "${LOCAL_MODEL_DIR}" \
+    --host "${HOST}" \
+    --port "${PORT}" \
+    --dtype "${DTYPE}" \
+    --device "${VLLM_DEVICE_TYPE}" \
+    ${VLLM_EXTRA_ARGS}
 fi
 
-log "Starting vLLM OpenAI server via ${API_SERVER}"
-log "vllm location: $("${PYTHON_BIN}" -c "import vllm; print(vllm.__file__)" 2>&1 || true)"
+warn "Could not locate vllm entrypoints openai api_server.py via package search."
+warn "Falling back to: vllm serve (OpenAI-compatible)."
 
-
-exec "${PYTHON_BIN}" -c '
-import os, sys, runpy
-api_server = os.environ["API_SERVER"]
-sys.argv = [
-  api_server,
-  "--model", os.environ["LOCAL_MODEL_DIR"],
-  "--host", os.environ["HOST"],
-  "--port", os.environ["PORT"],
-  "--dtype", os.environ["DTYPE"],
-  "--device", os.environ["VLLM_DEVICE_TYPE"],
-]
-extra = os.environ.get("VLLM_EXTRA_ARGS", "").strip()
-if extra:
-  sys.argv.extend(extra.split())
-runpy.run_path(api_server, run_name="__main__")
-' \
-API_SERVER="${API_SERVER}" \
-LOCAL_MODEL_DIR="${LOCAL_MODEL_DIR}" \
-HOST="${HOST}" \
-PORT="${PORT}" \
-DTYPE="${DTYPE}" \
-VLLM_DEVICE_TYPE="${VLLM_DEVICE_TYPE}" \
-VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS}"
-
-
-
-
-
-
+# Fallback: use vllm CLI (works on this image when imports are sane)
+exec /opt/app-root/bin/vllm serve "${LOCAL_MODEL_DIR}" \
+  --host "${HOST}" \
+  --port "${PORT}" \
+  --dtype "${DTYPE}" \
+  --device "${VLLM_DEVICE_TYPE}" \
+  ${VLLM_EXTRA_ARGS}
