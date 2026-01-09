@@ -131,62 +131,58 @@ else
   log "Using cached model at ${LOCAL_MODEL_DIR}"
 fi
 
-# 5) Start vLLM OpenAI-compatible server (robust locator)
-API_SERVER="$("${PYTHON_BIN}" - <<'PY'
+# 5) Start vLLM OpenAI-compatible server (systemd-safe)
+# Under systemd, module resolution can pick up a different/partial `vllm` and break `vllm.entrypoints`.
+# Force the RHAIIS site-packages to the front of sys.path and run the OpenAI server via python.
+SITEPKG="/opt/app-root/lib64/python3.12/site-packages"
+
+export SITEPKG LOCAL_MODEL_DIR HOST PORT DTYPE VLLM_DEVICE_TYPE VLLM_EXTRA_ARGS
+
+log "Starting vLLM via python with forced site-packages: ${SITEPKG}"
+
+exec "${PYTHON_BIN}" - <<'PY'
 import os, sys
 
-try:
-    import vllm
-except Exception:
-    print("")
-    raise
+sitepkg = os.environ.get("SITEPKG", "")
+if sitepkg and sitepkg not in sys.path:
+    sys.path.insert(0, sitepkg)
 
-# Prefer package path (works even if vllm.__file__ is None)
-paths = []
-if hasattr(vllm, "__path__"):
-    paths.extend(list(vllm.__path__))
+# Debug: show what we're importing under systemd
+import vllm
+print(f"[RHOIM] vllm imported from: file={getattr(vllm,'__file__',None)} path={list(getattr(vllm,'__path__',[]))[:3]}")
+print(f"[RHOIM] sys.path head: {sys.path[:8]}")
 
-# Fallback to __file__ if present
-vf = getattr(vllm, "__file__", None)
-if vf:
-    paths.append(os.path.dirname(vf))
+from vllm.entrypoints.openai.api_server import main
 
-# Dedup / clean
-paths = [p for p in dict.fromkeys(paths) if p and os.path.isdir(p)]
-if not paths:
-    print("")
-    sys.exit(0)
+model = os.environ["LOCAL_MODEL_DIR"]
+host = os.environ["HOST"]
+port = os.environ["PORT"]
+dtype = os.environ["DTYPE"]
+device = os.environ["VLLM_DEVICE_TYPE"]
+extra = os.environ.get("VLLM_EXTRA_ARGS", "").strip()
 
-target = ""
-for base in paths:
-    for root, _, files in os.walk(base):
-        if root.endswith(os.path.join("entrypoints", "openai")) and "api_server.py" in files:
-            target = os.path.join(root, "api_server.py")
-            break
-    if target:
-        break
+sys.argv = [
+    "api_server",
+    "--model", model,
+    "--host", host,
+    "--port", port,
+    "--dtype", dtype,
+    "--device", device,
+]
 
-print(target)
+if extra:
+    sys.argv.extend(extra.split())
+
+main()
 PY
-)"
 
-if [ -n "${API_SERVER}" ] && [ -f "${API_SERVER}" ]; then
-  log "Starting vLLM OpenAI server via ${API_SERVER}"
-  exec "${PYTHON_BIN}" "${API_SERVER}" \
-    --model "${LOCAL_MODEL_DIR}" \
-    --host "${HOST}" \
-    --port "${PORT}" \
-    --dtype "${DTYPE}" \
-    --device "${VLLM_DEVICE_TYPE}" \
-    ${VLLM_EXTRA_ARGS}
-fi
 
-warn "Could not locate api_server.py; falling back to vllm CLI serve."
 
-# Fallback (now that CDI is working, this should be fine)
-exec /opt/app-root/bin/vllm serve "${LOCAL_MODEL_DIR}" \
-  --host "${HOST}" \
-  --port "${PORT}" \
-  --dtype "${DTYPE}" \
-  --device "${VLLM_DEVICE_TYPE}" \
-  ${VLLM_EXTRA_ARGS}
+
+
+
+
+
+
+
+
