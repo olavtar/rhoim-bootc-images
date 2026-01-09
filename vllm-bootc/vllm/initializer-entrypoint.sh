@@ -131,19 +131,42 @@ else
   log "Using cached model at ${LOCAL_MODEL_DIR}"
 fi
 
-# 5) Start vLLM OpenAI-compatible server
-# Find api_server.py dynamically (RHAIIS layout may differ), then run it.
+# 5) Start vLLM OpenAI-compatible server (robust locator)
 API_SERVER="$("${PYTHON_BIN}" - <<'PY'
-import os, pkgutil, vllm
+import os, sys
 
-# Search within vllm package for the OpenAI api_server.py
-vllm_dir = os.path.dirname(vllm.__file__)
-target = None
-for root, _, files in os.walk(vllm_dir):
-    if root.endswith(os.path.join("entrypoints", "openai")) and "api_server.py" in files:
-        target = os.path.join(root, "api_server.py")
+try:
+    import vllm
+except Exception:
+    print("")
+    raise
+
+# Prefer package path (works even if vllm.__file__ is None)
+paths = []
+if hasattr(vllm, "__path__"):
+    paths.extend(list(vllm.__path__))
+
+# Fallback to __file__ if present
+vf = getattr(vllm, "__file__", None)
+if vf:
+    paths.append(os.path.dirname(vf))
+
+# Dedup / clean
+paths = [p for p in dict.fromkeys(paths) if p and os.path.isdir(p)]
+if not paths:
+    print("")
+    sys.exit(0)
+
+target = ""
+for base in paths:
+    for root, _, files in os.walk(base):
+        if root.endswith(os.path.join("entrypoints", "openai")) and "api_server.py" in files:
+            target = os.path.join(root, "api_server.py")
+            break
+    if target:
         break
-print(target or "")
+
+print(target)
 PY
 )"
 
@@ -158,10 +181,9 @@ if [ -n "${API_SERVER}" ] && [ -f "${API_SERVER}" ]; then
     ${VLLM_EXTRA_ARGS}
 fi
 
-warn "Could not locate vllm entrypoints openai api_server.py via package search."
-warn "Falling back to: vllm serve (OpenAI-compatible)."
+warn "Could not locate api_server.py; falling back to vllm CLI serve."
 
-# Fallback: use vllm CLI (works on this image when imports are sane)
+# Fallback (now that CDI is working, this should be fine)
 exec /opt/app-root/bin/vllm serve "${LOCAL_MODEL_DIR}" \
   --host "${HOST}" \
   --port "${PORT}" \
