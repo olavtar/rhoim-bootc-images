@@ -36,7 +36,9 @@ cd /path/to/rhoim-bootc-images/vllm-bootc
 # Login if needed (required for registry.redhat.io)
 podman login registry.redhat.io
 
-podman build   --platform linux/amd64   -t localhost/rhoim-bootc-rhaiis-gpu:latest   -f ./Containerfile .
+sudo podman build --no-cache \
+  -t localhost/rhoim-bootc-rhaiis:latest \
+  -f ./Containerfile .
 ```
 
 ### 2) (Optional) Build a bootc VM image (qcow2)
@@ -60,7 +62,18 @@ The bootc VM image will be created at: `images/qcow2/disk.qcow2`
 #### Preferred: NVIDIA CDI
 
 ```bash
-podman run --rm -it   --name rhoim-bootc-test   --privileged   --systemd=always   --device nvidia.com/gpu=all   -p 8000:8000   localhost/rhoim-bootc-rhaiis-gpu:latest
+sudo podman run --rm -it \
+  --name rhoim-bootc-test \
+  --privileged \
+  --user 0 \
+  --device nvidia.com/gpu=all \
+  --cgroupns=host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw,z \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
+  -v /var/tmp/rhoim-models:/tmp/models:Z \
+  -p 8000:8000 \
+  --entrypoint /sbin/init \
+  localhost/rhoim-bootc-rhaiis:latest
 ```
 
 #### Legacy: OCI hooks
