@@ -132,16 +132,43 @@ else
 fi
 
 # 5) Start vLLM OpenAI-compatible server
-# Use module execution to avoid console-script wrapper issues.
-log "PYTHONPATH=${PYTHONPATH:-}"
+# Run the OpenAI server by absolute path to avoid module-resolution issues under systemd.
+API_SERVER="/opt/app-root/lib64/python3.12/site-packages/vllm/entrypoints/openai/api_server.py"
 
-exec "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server \
-  --model "${LOCAL_MODEL_DIR}" \
-  --host "${HOST}" \
-  --port "${PORT}" \
-  --dtype "${DTYPE}" \
-  --device "${VLLM_DEVICE_TYPE}" \
-  ${VLLM_EXTRA_ARGS}
+if [ ! -f "${API_SERVER}" ]; then
+  err "api_server.py not found at ${API_SERVER}"
+  err "Verify vLLM is installed in the image and the path is correct."
+  exit 1
+fi
+
+log "Starting vLLM OpenAI server via ${API_SERVER}"
+log "vllm location: $("${PYTHON_BIN}" -c "import vllm; print(vllm.__file__)" 2>&1 || true)"
+
+
+exec "${PYTHON_BIN}" -c '
+import os, sys, runpy
+api_server = os.environ["API_SERVER"]
+sys.argv = [
+  api_server,
+  "--model", os.environ["LOCAL_MODEL_DIR"],
+  "--host", os.environ["HOST"],
+  "--port", os.environ["PORT"],
+  "--dtype", os.environ["DTYPE"],
+  "--device", os.environ["VLLM_DEVICE_TYPE"],
+]
+extra = os.environ.get("VLLM_EXTRA_ARGS", "").strip()
+if extra:
+  sys.argv.extend(extra.split())
+runpy.run_path(api_server, run_name="__main__")
+' \
+API_SERVER="${API_SERVER}" \
+LOCAL_MODEL_DIR="${LOCAL_MODEL_DIR}" \
+HOST="${HOST}" \
+PORT="${PORT}" \
+DTYPE="${DTYPE}" \
+VLLM_DEVICE_TYPE="${VLLM_DEVICE_TYPE}" \
+VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS}"
+
 
 
 
