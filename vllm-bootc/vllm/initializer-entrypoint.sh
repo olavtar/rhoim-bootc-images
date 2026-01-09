@@ -6,6 +6,8 @@ set -euo pipefail
 # - GPU is REQUIRED. Fail fast if not present.
 # - Assumes vLLM + torch are provided by the base image.
 # - Downloads model to MODEL_PATH if not present (requires outbound network unless HF is cached).
+# - Uses python module for HF download (no huggingface-cli / no InquirerPy dependency).
+# - Explicitly prefers /opt/app-root/bin/python3 because systemd PATH may not include it.
 # =============================================================================
 
 log()  { echo "[RHOIM] $*"; }
@@ -17,6 +19,19 @@ if [ -f "/etc/sysconfig/rhoim" ]; then
   # shellcheck disable=SC1091
   source /etc/sysconfig/rhoim
 fi
+
+# 1.5) Choose the right Python (RHAIIS images commonly use /opt/app-root/bin/python3)
+PYTHON_BIN="/opt/app-root/bin/python3"
+if [ ! -x "${PYTHON_BIN}" ]; then
+  PYTHON_BIN="$(command -v python3 || true)"
+fi
+if [ -z "${PYTHON_BIN}" ] || [ ! -x "${PYTHON_BIN}" ]; then
+  err "python3 not found"
+  exit 1
+fi
+
+# Make sure the preferred python location is on PATH (helps subprocesses and vLLM)
+export PATH="/opt/app-root/bin:${PATH}"
 
 # 2) Map old names -> new names (backward compatible)
 VLLM_MODEL="${VLLM_MODEL:-${MODEL_ID:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}}"
@@ -44,8 +59,8 @@ have_gpu() {
     return 0
   fi
 
-  # Last resort: ask torch
-  python3 - <<'PY' >/dev/null 2>&1
+  # Last resort: ask torch (using the selected python)
+  "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1
 import torch
 raise SystemExit(0 if (torch.version.cuda is not None and torch.cuda.is_available()) else 1)
 PY
@@ -68,6 +83,7 @@ log "VLLM_MODEL=${VLLM_MODEL}"
 log "HOST=${HOST} PORT=${PORT}"
 log "MODEL_PATH=${MODEL_PATH}"
 log "Selected DEVICE=cuda (GPU-only)"
+log "Using PYTHON_BIN=${PYTHON_BIN}"
 
 # 4) Ensure model is present
 mkdir -p "${MODEL_PATH}"
@@ -90,16 +106,16 @@ if ! is_dir_populated "${LOCAL_MODEL_DIR}"; then
 
   log "Downloading ${VLLM_MODEL} to ${LOCAL_MODEL_DIR}"
 
-  # Intentionally do NOT depend on `huggingface-cli` (the [cli] extra pulls InquirerPy).
-  # Instead, use the python module which is available with the base huggingface_hub package.
-  if ! python3 -c "import huggingface_hub" >/dev/null 2>&1; then
-    err "huggingface_hub is not installed."
+  # Use huggingface_hub python module (no huggingface-cli extra dependency)
+  if ! "${PYTHON_BIN}" -c "import huggingface_hub" >/dev/null 2>&1; then
+    err "huggingface_hub is not installed for ${PYTHON_BIN}."
     err "Install huggingface_hub (>=0.34.0,<1.0) in the image or pre-populate ${LOCAL_MODEL_DIR}."
     exit 1
   fi
 
-  # Use the built-in CLI module entrypoint (no extra deps like InquirerPy)
-  python3 -m huggingface_hub.cli.download "${VLLM_MODEL}" \
+  # If a token is required, user can pass HF_TOKEN or have it in ~/.cache/huggingface.
+  # Use `--local-dir-use-symlinks False` to avoid symlink issues across filesystems.
+  "${PYTHON_BIN}" -m huggingface_hub.cli.download "${VLLM_MODEL}" \
     --local-dir "${LOCAL_MODEL_DIR}" \
     --local-dir-use-symlinks False
 
@@ -109,9 +125,8 @@ else
 fi
 
 # 5) Start vLLM OpenAI-compatible server
-# NOTE: on RHAIIS image, vLLM is typically installed system-wide and available to python3.
 # Add any extra args via VLLM_EXTRA_ARGS in /etc/sysconfig/rhoim (or env override).
-exec python3 -m vllm.entrypoints.openai.api_server \
+exec "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server \
   --model "${LOCAL_MODEL_DIR}" \
   --host "${HOST}" \
   --port "${PORT}" \
