@@ -1,196 +1,107 @@
-# RHOIM Bootc Image (GPU-only) - RHEL 9 + RHAIIS vLLM
+# RHOIM Bootc Image (GPU-only, RHAIIS-based)
 
-This directory contains the **Containerfile** and configuration files for building a **bootc-compatible** RHEL 9 image that serves an LLM via **vLLM**.
+This directory contains the files required to build a **bootc OS image** (convertible to `qcow2` / `raw` / `vhd` via `bootc-image-builder`) that **serves an LLM using the official RHAIIS vLLM container**, managed by **systemd (Quadlet)**.
 
-This variant is **GPU-only** and is built **on top of the supported RHAIIS vLLM CUDA image** (instead of building vLLM/Torch from source).
+> **Key design choice:**  
+> vLLM, PyTorch, CUDA, and model serving **run inside the RHAIIS container**, not on the bootc OS layer.  
+> The bootc image acts as a minimal, reproducible host that starts the container automatically at boot.
+
+---
 
 ## Overview
 
-- **Base Image**: `registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest`
-- **Target Architecture**: `linux/amd64` (x86_64) **only**
-- **Features**
-  - vLLM OpenAI-compatible API server
-  - Systemd service management (`rhoim-vllm.service`)
-  - Hugging Face model download to a local model directory on first start
-  - **GPU-only**: fails fast if an NVIDIA GPU is not visible inside the container/VM
+- **Bootc OS base**: `registry.redhat.io/rhel9/rhel-bootc:latest`
+- **Model server runtime**: `registry.redhat.io/rhaiis/vllm-cuda-rhel9:*`
+- **Architecture**: `linux/amd64` (x86_64) **only**
+- **GPU-only** (no CPU fallback)
+
+### What this image provides
+- vLLM **OpenAI-compatible API server**
+- Systemd-managed container startup via **Podman Quadlet**
+- Persistent model + cache storage on the host OS
+- Automatic startup on boot (VM / disk image)
+- No Python / vLLM installed on the OS layer
+
+---
+
+## Design Summary
+
+| Layer | Responsibility |
+|-----|----------------|
+| bootc OS | systemd, podman, Quadlet, persistent storage |
+| RHAIIS container | vLLM, PyTorch, CUDA, OpenAI API |
+| systemd | lifecycle management (`container-rhoim-vllm.service`) |
+
+---
 
 ## Prerequisites
 
-### Build prerequisites
+### Build
 - Podman
-- Access to `registry.redhat.io` (login required to pull the RHAIIS base image)
+- Access to `registry.redhat.io`
 
-### Runtime prerequisites (GPU)
-- NVIDIA GPU + compatible NVIDIA drivers on the host
-- Container runtime configured for GPU passthrough:
-  - **Preferred (modern)**: NVIDIA CDI
-  - **Legacy**: OCI hooks (`/usr/share/containers/oci/hooks.d`)
+```bash
+podman login registry.redhat.io
+```
+
+### Runtime (GPU)
+- NVIDIA GPU
+- NVIDIA drivers installed on the host
+- GPU passthrough configured for Podman:
+  - **Preferred**: NVIDIA CDI
+  - **Legacy**: OCI hooks
+
+---
 
 ## Build Instructions
 
-### 1) Build the bootc container image
+### 1) Build the bootc OS container image
 
 ```bash
-cd /path/to/rhoim-bootc-images/vllm-bootc
+cd vllm-bootc
 
-# Login if needed (required for registry.redhat.io)
-podman login registry.redhat.io
-
-sudo podman build --no-cache \
-  -t localhost/rhoim-bootc-rhaiis:latest \
-  -f ./Containerfile .
+sudo podman build --no-cache   -t localhost/rhoim-bootc-rhaiis:latest   -f Containerfile .
 ```
 
-### 2) (Optional) Build a bootc VM image (qcow2)
+---
 
-Convert the container image to a bootable VM disk image using bootc-image-builder:
+### 2) (Optional) Build a bootable VM disk image
 
 ```bash
 mkdir -p images
 
-podman run --rm --privileged   -v /var/lib/containers/storage:/var/lib/containers/storage   -v "$(pwd)/images":/output   quay.io/centos-bootc/bootc-image-builder:latest   --type qcow2   localhost/rhoim-bootc-rhaiis-gpu:latest
+podman run --rm --privileged   -v /var/lib/containers/storage:/var/lib/containers/storage   -v "$(pwd)/images":/output   quay.io/centos-bootc/bootc-image-builder:latest   --type qcow2   localhost/rhoim-bootc-rhaiis:latest
 ```
 
-The bootc VM image will be created at: `images/qcow2/disk.qcow2`
+---
 
-> Note: `bootc-image-builder` is just a converter; it does not change the OS inside the image.
+## Runtime Behavior
 
-## Running (GPU-only)
-
-### Run the container directly (recommended for quick testing)
-
-#### Preferred: NVIDIA CDI
-
-```bash
-sudo podman run --rm -it \
-  --name rhoim-bootc-test \
-  --privileged \
-  --user 0 \
-  --device nvidia.com/gpu=all \
-  --cgroupns=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw,z \
-  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
-  -v /var/tmp/rhoim-models:/tmp/models:Z \
-  -p 8000:8000 \
-  --entrypoint /sbin/init \
-  localhost/rhoim-bootc-rhaiis:latest
-```
-
-#### Legacy: OCI hooks
-
-```bash
-podman run --rm -it   --name rhoim-bootc-test   --privileged   --systemd=always   --hooks-dir=/usr/share/containers/oci/hooks.d   -p 8000:8000   localhost/rhoim-bootc-rhaiis-gpu:latest
-```
-
-### Verify GPU visibility (inside the container)
-
-```bash
-nvidia-smi
-```
-
-If GPUs are not visible, the service will fail fast with an error like:
+On boot, systemd will automatically start:
 
 ```
-[RHOIM] ERROR: No NVIDIA GPU devices found (/dev/nvidia*). This image is GPU-only.
+container-rhoim-vllm.service
 ```
 
-## Testing and Verification
-
-### 1) Check vLLM service status
-
-```bash
-systemctl status rhoim-vllm.service
-```
-
-### 2) View service logs
-
-```bash
-journalctl -u rhoim-vllm.service -f
-```
-
-### 3) Test the OpenAI-compatible API
-
-Wait for the service to fully start (model loading can take 1–3 minutes), then:
-
-```bash
-# List available models
-curl http://127.0.0.1:8000/v1/models
-
-# Health check (if available)
-curl http://127.0.0.1:8000/health
-
-# Chat completion example
-curl http://127.0.0.1:8000/v1/chat/completions   -H "Content-Type: application/json"   -d '{
-    "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
-```
+---
 
 ## Configuration
 
-Edit `/etc/sysconfig/rhoim` inside the VM/container (or rebuild with changes). For this GPU-only image:
+Edit `/etc/sysconfig/rhoim` on the booted VM:
 
 ```bash
-MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-MODEL_PATH="/tmp/models"
-VLLM_PORT="8000"
+VLLM_MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 VLLM_HOST="0.0.0.0"
-
-# GPU-only
-VLLM_DEVICE_TYPE="cuda"
-RHOIM_ACCELERATOR_MODE="gpu"
+VLLM_PORT="8000"
+VLLM_EXTRA_ARGS=""
 ```
 
-After modifying, restart the service:
+---
+
+## Testing
 
 ```bash
-systemctl restart rhoim-vllm.service
+curl http://127.0.0.1:8000/v1/models
 ```
 
-## Troubleshooting
-
-### Cannot pull the base image (registry.redhat.io auth)
-
-```bash
-podman login registry.redhat.io
-podman pull registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
-```
-
-### Service fails immediately: “GPU-only” / no NVIDIA devices
-
-- Ensure the host has NVIDIA drivers installed
-- Ensure GPU passthrough is enabled:
-  - CDI: `--device nvidia.com/gpu=all`
-  - Hooks: `--hooks-dir=/usr/share/containers/oci/hooks.d`
-- Confirm inside container: `nvidia-smi`
-
-## Deprecations
-
-- `scripts/build-vllm-from-source.sh` is **deprecated** for this RHAIIS-based GPU-only image path.
-  - This repo no longer builds vLLM/Torch from source for the default GPU image.
-  - The script is kept for reference/legacy experimentation and may be removed in a future release.
-
-## File Structure
-
-```
-vllm-bootc/
-├── Containerfile
-├── scripts/
-│   └── build-vllm-from-source.sh        # DEPRECATED (legacy path)
-├── etc/
-│   ├── sysconfig/
-│   │   └── rhoim                         # Environment defaults (GPU-only)
-│   ├── systemd/
-│   │   └── system/
-│   │       └── rhoim-vllm.service        # Systemd service unit (GPU-only)
-│   └── sysusers.d/
-│       └── rhoim.conf                    # User creation for rhoim service
-├── vllm/
-│   └── initializer-entrypoint.sh         # vLLM startup script (GPU-only)
-└── README.md
-```
-
-## Additional Resources
-
-- bootc: https://github.com/containers/bootc
-- vLLM: https://docs.vllm.ai/
+---

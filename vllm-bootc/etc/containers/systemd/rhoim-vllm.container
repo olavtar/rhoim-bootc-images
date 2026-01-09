@@ -1,0 +1,28 @@
+[Unit]
+Description=RHOIM vLLM (RHAIIS container)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
+PublishPort=8000:8000
+
+Volume=/var/lib/rhoim/models:/models:Z
+Volume=/var/lib/rhoim/cache:/opt/app-root/src/.cache:Z
+
+EnvironmentFile=/etc/sysconfig/rhoim
+
+PodmanArgs=--ipc=host
+PodmanArgs=--shm-size=64g
+PodmanArgs=--pids-limit=0
+PodmanArgs=--security-opt=label=disable
+
+# GPU (if NVIDIA CDI is configured on the host)
+PodmanArgs=--device nvidia.com/gpu=all
+
+Exec=--model /models/${VLLM_MODEL} --host 0.0.0.0 --port 8000
+
+[Service]
+Restart=always
+RestartSec=2
+TimeoutStartSec=300

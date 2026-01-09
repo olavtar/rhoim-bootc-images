@@ -1,25 +1,25 @@
-# RHOIM Environment Variables for bootc Model Serving (GPU-only)
+# RHOIM Environment Variables for bootc Model Serving (RHAIIS container)
 
-# --- Core Paths and Configuration (Used by initializer) ---
-MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-MODEL_PATH="/tmp/models"
+# Model identifier (used by the Quadlet Exec/Command)
+VLLM_MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+# Host paths (these are mounted into the container)
+# Host: /var/lib/rhoim/models  -> Container: /models
+# Host: /var/lib/rhoim/cache   -> Container: /opt/app-root/src/.cache
+RHOIM_MODELS_DIR="/var/lib/rhoim/models"
+RHOIM_CACHE_DIR="/var/lib/rhoim/cache"
+
+# Network config (optional unless you wire them into Exec/Command)
 VLLM_PORT="8000"
 VLLM_HOST="0.0.0.0"
 
-# --- GPU-only device configuration ---
-# This image is NVIDIA GPU-only. CPU mode / fallback is not supported in this variant.
-# Requirements:
-# - NVIDIA drivers on the host
-# - GPU passthrough enabled (e.g. NVIDIA Container Toolkit / CDI)
-#
-# You may override this value, but the initializer will enforce CUDA for GPU-only images.
-VLLM_DEVICE_TYPE="cuda"
-RHOIM_ACCELERATOR_MODE="gpu"
-
-# Optional: extra args passed directly to vLLM OpenAI API server
+# Optional: extra args passed to vLLM OpenAI API server
 VLLM_EXTRA_ARGS=""
 
-# --- Gateway/API Configuration (Used by rhoim-gateway.service, if applicable) ---
+# Optional: HF auth / offline behavior (only needed if container downloads)
+# HUGGING_FACE_HUB_TOKEN="..."
+# HF_HUB_OFFLINE=1
+# TRANSFORMERS_OFFLINE=1
+
+# --- Gateway/API Configuration (if you still use it elsewhere) ---
 API_KEYS="devkey1,devkey2"
-# BASE_PATH=/
-# ENABLE_RHOAI_ALIAS=true
