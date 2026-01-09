@@ -1,25 +1,21 @@
-# RHOIM Environment Variables for bootc Model Serving (RHAIIS container)
+# Hugging Face model ID to download
+MODEL_ID="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
-# Model identifier (used by the Quadlet Exec/Command)
-VLLM_MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-# Host paths (these are mounted into the container)
-# Host: /var/lib/rhoim/models  -> Container: /models
-# Host: /var/lib/rhoim/cache   -> Container: /opt/app-root/src/.cache
-RHOIM_MODELS_DIR="/var/lib/rhoim/models"
+# Persistent locations on the VM
+MODELS_DIR="/var/lib/rhoim/models"
 RHOIM_CACHE_DIR="/var/lib/rhoim/cache"
 
-# Network config (optional unless you wire them into Exec/Command)
-VLLM_PORT="8000"
-VLLM_HOST="0.0.0.0"
+# Hugging Face / Transformers cache locations (used by huggingface-cli)
+HF_HOME="/var/lib/rhoim/cache"
+HF_HUB_CACHE="/var/lib/rhoim/cache"
+TRANSFORMERS_CACHE="/var/lib/rhoim/cache"
 
-# Optional: extra args passed to vLLM OpenAI API server
-VLLM_EXTRA_ARGS=""
-
-# Optional: HF auth / offline behavior (only needed if container downloads)
+# Optional token (needed only for gated/private models)
 # HUGGING_FACE_HUB_TOKEN="..."
-# HF_HUB_OFFLINE=1
-# TRANSFORMERS_OFFLINE=1
 
-# --- Gateway/API Configuration (if you still use it elsewhere) ---
-API_KEYS="devkey1,devkey2"
+# vLLM listen
+VLLM_HOST="0.0.0.0"
+VLLM_PORT="8000"
+
+# Optional extra args
+VLLM_EXTRA_ARGS=""

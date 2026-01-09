@@ -1,7 +1,7 @@
 [Unit]
 Description=RHOIM vLLM (RHAIIS container)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target rhoim-model-prefetch.service
+Wants=network-online.target rhoim-model-prefetch.service
 
 [Container]
 Image=registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest
@@ -12,14 +12,14 @@ Volume=/var/lib/rhoim/cache:/opt/app-root/src/.cache:Z
 
 EnvironmentFile=/etc/sysconfig/rhoim
 
-PodmanArgs=--ipc=host
 PodmanArgs=--pids-limit=0
 PodmanArgs=--security-opt=label=disable
 
-# GPU (if NVIDIA CDI is configured on the host)
+# For a REAL VM with NVIDIA CDI configured, enable this:
 PodmanArgs=--device nvidia.com/gpu=all
 
-Exec=--model /models/${VLLM_MODEL} --host 0.0.0.0 --port 8000
+# Serve from the local model path created by prefetch
+Exec=--model /models/${MODEL_ID} --host ${VLLM_HOST} --port ${VLLM_PORT} ${VLLM_EXTRA_ARGS}
 
 [Service]
 Restart=always

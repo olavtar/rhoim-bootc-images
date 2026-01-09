@@ -17,14 +17,21 @@ RUN mkdir -p \
 COPY etc/sysconfig/rhoim /etc/sysconfig/rhoim
 COPY etc/containers/systemd/rhoim-vllm.container /etc/containers/systemd/rhoim-vllm.container
 
-# Optional: keep your sysusers user creation
-COPY etc/sysusers.d/rhoim.conf /etc/sysusers.d/rhoim.conf
+COPY scripts/prefetch-model.sh /usr/local/bin/prefetch-model.sh
+RUN chmod +x /usr/local/bin/prefetch-model.sh
 
+COPY etc/systemd/system/rhoim-model-prefetch.service /etc/systemd/system/rhoim-model-prefetch.service
+
+# Enable the oneshot at boot (symlink works during build)
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    ln -sf /etc/systemd/system/rhoim-model-prefetch.service \
+      /etc/systemd/system/multi-user.target.wants/rhoim-model-prefetch.service
+
+# Optional sysusers
+COPY etc/sysusers.d/rhoim.conf /etc/sysusers.d/rhoim.conf
 RUN systemd-sysusers || true
 
 EXPOSE 8000
-
 LABEL org.osbuild.bootc=true bootc=true
 RUN bootc container lint || true
-
 CMD ["/sbin/init"]

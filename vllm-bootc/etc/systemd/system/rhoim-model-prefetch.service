@@ -1,0 +1,16 @@
+[Unit]
+Description=RHOIM model prefetch (Hugging Face)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/sysconfig/rhoim
+ExecStart=/usr/local/bin/prefetch-model.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+
+ConditionPathExists=!/var/lib/rhoim/models/TinyLlama/TinyLlama-1.1B-Chat-v1.0/config.json
+
