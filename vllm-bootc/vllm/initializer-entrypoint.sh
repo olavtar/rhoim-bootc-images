@@ -33,6 +33,13 @@ fi
 # Make sure the preferred python location is on PATH (helps subprocesses and vLLM)
 export PATH="/opt/app-root/bin:${PATH}"
 
+# Ensure RHAIIS site-packages is visible even under systemd's stripped environment
+SITEPKG="/opt/app-root/lib64/python3.12/site-packages"
+if [ -d "${SITEPKG}" ]; then
+  export PYTHONPATH="${SITEPKG}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
+
 # 2) Map old names -> new names (backward compatible)
 VLLM_MODEL="${VLLM_MODEL:-${MODEL_ID:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}}"
 HOST="${HOST:-${VLLM_HOST:-0.0.0.0}}"
@@ -126,6 +133,8 @@ fi
 
 # 5) Start vLLM OpenAI-compatible server
 # Use module execution to avoid console-script wrapper issues.
+log "PYTHONPATH=${PYTHONPATH:-}"
+
 exec "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server \
   --model "${LOCAL_MODEL_DIR}" \
   --host "${HOST}" \
@@ -133,6 +142,7 @@ exec "${PYTHON_BIN}" -m vllm.entrypoints.openai.api_server \
   --dtype "${DTYPE}" \
   --device "${VLLM_DEVICE_TYPE}" \
   ${VLLM_EXTRA_ARGS}
+
 
 
 
