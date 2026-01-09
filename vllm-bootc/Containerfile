@@ -20,8 +20,7 @@ COPY etc/containers/systemd/rhoim-vllm.container /etc/containers/systemd/rhoim-v
 # Optional: keep your sysusers user creation
 COPY etc/sysusers.d/rhoim.conf /etc/sysusers.d/rhoim.conf
 
-RUN systemd-sysusers || true && \
-    systemctl enable container-rhoim-vllm.service
+RUN systemd-sysusers || true
 
 EXPOSE 8000
 
