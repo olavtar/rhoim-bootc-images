@@ -17,7 +17,7 @@ RUN dnf -y install \
 
 # Install huggingface-cli, but keep huggingface_hub compatible with transformers in this stack
 RUN python3 -m pip install --no-cache-dir --upgrade --force-reinstall \
-    "huggingface_hub[cli]>=0.34.0,<1.0"
+    "huggingface_hub>=0.34.0,<1.0"
 
 
 # ---- Runtime environment (keep your safety toggles) ----

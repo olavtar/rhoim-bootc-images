@@ -90,15 +90,16 @@ if ! is_dir_populated "${LOCAL_MODEL_DIR}"; then
 
   log "Downloading ${VLLM_MODEL} to ${LOCAL_MODEL_DIR}"
 
-  if ! command -v huggingface-cli >/dev/null 2>&1; then
-    err "huggingface-cli not found in PATH."
-    err "Install it in the image or pre-populate ${LOCAL_MODEL_DIR}."
+  # Intentionally do NOT depend on `huggingface-cli` (the [cli] extra pulls InquirerPy).
+  # Instead, use the python module which is available with the base huggingface_hub package.
+  if ! python3 -c "import huggingface_hub" >/dev/null 2>&1; then
+    err "huggingface_hub is not installed."
+    err "Install huggingface_hub (>=0.34.0,<1.0) in the image or pre-populate ${LOCAL_MODEL_DIR}."
     exit 1
   fi
 
-  # If a token is required, user can pass HF_TOKEN or have it in ~/.cache/huggingface.
-  # Use `--local-dir-use-symlinks False` to avoid symlink issues across filesystems.
-  huggingface-cli download "${VLLM_MODEL}" \
+  # Use the built-in CLI module entrypoint (no extra deps like InquirerPy)
+  python3 -m huggingface_hub.cli.download "${VLLM_MODEL}" \
     --local-dir "${LOCAL_MODEL_DIR}" \
     --local-dir-use-symlinks False
 
