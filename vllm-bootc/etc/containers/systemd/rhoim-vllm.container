@@ -13,7 +13,6 @@ Volume=/var/lib/rhoim/cache:/opt/app-root/src/.cache:Z
 EnvironmentFile=/etc/sysconfig/rhoim
 
 PodmanArgs=--ipc=host
-PodmanArgs=--shm-size=64g
 PodmanArgs=--pids-limit=0
 PodmanArgs=--security-opt=label=disable
 
