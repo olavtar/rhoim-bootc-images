@@ -21,11 +21,12 @@ echo "[prefetch] Downloading ${MODEL_ID} -> ${TARGET_DIR}"
 
 # Use the RHAIIS image to perform the download so bootc OS doesn't need python tooling
 podman run --rm \
+  --entrypoint /bin/bash \
   -v "${MODELS_DIR}:/models:Z" \
   -v "${HF_HOME}:/opt/app-root/src/.cache:Z" \
   --env-file /etc/sysconfig/rhoim \
   registry.redhat.io/rhaiis/vllm-cuda-rhel9:latest \
-  bash -lc '
+  -lc '
     set -euo pipefail
     mkdir -p "/models/${MODEL_ID}"
     huggingface-cli download "${MODEL_ID}" \
