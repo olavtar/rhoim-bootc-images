@@ -131,58 +131,81 @@ else
   log "Using cached model at ${LOCAL_MODEL_DIR}"
 fi
 
-# 5) Start vLLM OpenAI-compatible server (systemd-safe)
-# Under systemd, module resolution can pick up a different/partial `vllm` and break `vllm.entrypoints`.
-# Force the RHAIIS site-packages to the front of sys.path and run the OpenAI server via python.
-SITEPKG="/opt/app-root/lib64/python3.12/site-packages"
+# 5) Start vLLM OpenAI-compatible server (systemd-safe, no vllm.entrypoints import)
+# vllm may be a namespace package under systemd (vllm.__file__ = None) and `vllm.entrypoints` import can fail.
+# Instead: locate api_server.py on disk under the vllm package paths and run it via runpy.
 
+SITEPKG="/opt/app-root/lib64/python3.12/site-packages"
 export SITEPKG LOCAL_MODEL_DIR HOST PORT DTYPE VLLM_DEVICE_TYPE VLLM_EXTRA_ARGS
 
-log "Starting vLLM via python with forced site-packages: ${SITEPKG}"
+log "Starting vLLM by locating api_server.py on disk (avoids importing vllm.entrypoints)"
 
 exec "${PYTHON_BIN}" - <<'PY'
-import os, sys
+import os, sys, runpy
 
+# Ensure RHAIIS site-packages is preferred
 sitepkg = os.environ.get("SITEPKG", "")
 if sitepkg and sitepkg not in sys.path:
     sys.path.insert(0, sitepkg)
 
-# Debug: show what we're importing under systemd
 import vllm
-print(f"[RHOIM] vllm imported from: file={getattr(vllm,'__file__',None)} path={list(getattr(vllm,'__path__',[]))[:3]}")
+
+paths = []
+# vllm can be a namespace package => __file__ may be None, but __path__ should exist
+paths.extend(list(getattr(vllm, "__path__", [])))
+
+vf = getattr(vllm, "__file__", None)
+if vf:
+    paths.append(os.path.dirname(vf))
+
+# Dedup + keep existing dirs
+paths = [p for p in dict.fromkeys(paths) if p and os.path.isdir(p)]
+
+print(f"[RHOIM] vllm imported from: file={getattr(vllm,'__file__',None)} path={paths[:3]}")
 print(f"[RHOIM] sys.path head: {sys.path[:8]}")
 
-from vllm.entrypoints.openai.api_server import main
+api_server = ""
+for base in paths:
+    for root, _, files in os.walk(base):
+        if "api_server.py" in files and root.endswith(os.path.join("openai")):
+            api_server = os.path.join(root, "api_server.py")
+            break
+    if api_server:
+        break
 
+if not api_server:
+    # fallback: search anywhere under vllm if openai/ layout differs
+    for base in paths:
+        for root, _, files in os.walk(base):
+            if "api_server.py" in files:
+                api_server = os.path.join(root, "api_server.py")
+                break
+        if api_server:
+            break
+
+if not api_server:
+    raise SystemExit("[RHOIM] ERROR: Could not find api_server.py under vllm package paths.")
+
+print(f"[RHOIM] Using api_server.py at: {api_server}")
+
+# Build argv for api_server.py
 model = os.environ["LOCAL_MODEL_DIR"]
-host = os.environ["HOST"]
-port = os.environ["PORT"]
+host  = os.environ["HOST"]
+port  = os.environ["PORT"]
 dtype = os.environ["DTYPE"]
 device = os.environ["VLLM_DEVICE_TYPE"]
 extra = os.environ.get("VLLM_EXTRA_ARGS", "").strip()
 
 sys.argv = [
-    "api_server",
+    api_server,
     "--model", model,
     "--host", host,
     "--port", port,
     "--dtype", dtype,
     "--device", device,
 ]
-
 if extra:
     sys.argv.extend(extra.split())
 
-main()
+runpy.run_path(api_server, run_name="__main__")
 PY
-
-
-
-
-
-
-
-
-
-
-
