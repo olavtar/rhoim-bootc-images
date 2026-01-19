@@ -7,7 +7,16 @@ RUN dnf -y install \
       jq \
       ca-certificates \
       cloud-init \
+      sudo \
     && dnf clean all
+
+# Enable cloud-init services for AWS
+RUN systemctl enable cloud-init cloud-init-local cloud-config cloud-final
+
+# Create ec2-user with sudo access
+RUN useradd -m -G wheel ec2-user && \
+    echo "ec2-user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ec2-user && \
+    chmod 440 /etc/sudoers.d/ec2-user
 
 RUN mkdir -p \
       /etc/containers/systemd \
