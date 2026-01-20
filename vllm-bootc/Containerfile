@@ -21,7 +21,8 @@ RUN useradd -m -G wheel ec2-user && \
     echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL1WGIkHhM4VAiL2brBXKSE7XJdFPfBc5GU0rnsQA/wJ" > /home/ec2-user/.ssh/authorized_keys && \
     chmod 700 /home/ec2-user/.ssh && \
     chmod 600 /home/ec2-user/.ssh/authorized_keys && \
-    chown -R ec2-user:ec2-user /home/ec2-user/.ssh
+    chown -R ec2-user:ec2-user /home/ec2-user/.ssh && \
+    restorecon -R /home/ec2-user/.ssh
 
 RUN mkdir -p \
       /etc/containers/systemd \
