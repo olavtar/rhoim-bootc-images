@@ -13,16 +13,22 @@ RUN dnf -y install \
 # Enable cloud-init services for AWS
 RUN systemctl enable cloud-init cloud-init-local cloud-config cloud-final
 
-# Create ec2-user with sudo access and SSH key
+# Create ec2-user with sudo access and set password
 RUN useradd -m -G wheel ec2-user && \
+    echo "ec2-user:rhoim123" | chpasswd && \
     echo "ec2-user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ec2-user && \
-    chmod 440 /etc/sudoers.d/ec2-user && \
-    mkdir -p /home/ec2-user/.ssh && \
-    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL1WGIkHhM4VAiL2brBXKSE7XJdFPfBc5GU0rnsQA/wJ" > /home/ec2-user/.ssh/authorized_keys && \
-    chmod 700 /home/ec2-user/.ssh && \
-    chmod 600 /home/ec2-user/.ssh/authorized_keys && \
-    chown -R ec2-user:ec2-user /home/ec2-user/.ssh && \
-    restorecon -R /home/ec2-user/.ssh
+    chmod 440 /etc/sudoers.d/ec2-user
+
+# Configure SSH to allow password authentication
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf '%s\n' \
+      'PasswordAuthentication yes' \
+      'PubkeyAuthentication yes' \
+      'PermitRootLogin yes' \
+      'PermitEmptyPasswords no' \
+      'ChallengeResponseAuthentication no' \
+      'UsePAM yes' > /etc/ssh/sshd_config.d/50-password-auth.conf && \
+    systemctl enable sshd.service
 
 RUN mkdir -p \
       /etc/containers/systemd \
