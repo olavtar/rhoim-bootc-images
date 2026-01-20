@@ -13,10 +13,15 @@ RUN dnf -y install \
 # Enable cloud-init services for AWS
 RUN systemctl enable cloud-init cloud-init-local cloud-config cloud-final
 
-# Create ec2-user with sudo access
+# Create ec2-user with sudo access and SSH key
 RUN useradd -m -G wheel ec2-user && \
     echo "ec2-user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ec2-user && \
-    chmod 440 /etc/sudoers.d/ec2-user
+    chmod 440 /etc/sudoers.d/ec2-user && \
+    mkdir -p /home/ec2-user/.ssh && \
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL1WGIkHhM4VAiL2brBXKSE7XJdFPfBc5GU0rnsQA/wJ" > /home/ec2-user/.ssh/authorized_keys && \
+    chmod 700 /home/ec2-user/.ssh && \
+    chmod 600 /home/ec2-user/.ssh/authorized_keys && \
+    chown -R ec2-user:ec2-user /home/ec2-user/.ssh
 
 RUN mkdir -p \
       /etc/containers/systemd \
