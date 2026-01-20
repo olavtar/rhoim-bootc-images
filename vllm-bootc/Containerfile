@@ -14,8 +14,10 @@ RUN dnf -y install \
 RUN systemctl enable cloud-init cloud-init-local cloud-config cloud-final
 
 # Create ec2-user with sudo access and set password
+# Use encrypted password hash for bootc compatibility (password: rhoim123)
 RUN useradd -m -G wheel ec2-user && \
-    echo "ec2-user:rhoim123" | chpasswd && \
+    echo 'root:$6$randomsalt$Vm.fV71RTQ218MBnpOtxkf10x6YNVQI0Ovye1HLaYV0ZdTvjpS1oGJMw1JUHcRWth1.fPzQIS4Rb7ImGGdTBn1' | chpasswd -e && \
+    echo 'ec2-user:$6$randomsalt$Vm.fV71RTQ218MBnpOtxkf10x6YNVQI0Ovye1HLaYV0ZdTvjpS1oGJMw1JUHcRWth1.fPzQIS4Rb7ImGGdTBn1' | chpasswd -e && \
     echo "ec2-user ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ec2-user && \
     chmod 440 /etc/sudoers.d/ec2-user
 
