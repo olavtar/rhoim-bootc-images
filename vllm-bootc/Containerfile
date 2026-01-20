@@ -22,14 +22,19 @@ RUN useradd -m -G wheel ec2-user && \
     chmod 440 /etc/sudoers.d/ec2-user
 
 # Configure SSH to allow password authentication
-RUN mkdir -p /etc/ssh/sshd_config.d && \
+RUN mkdir -p /etc/ssh && \
     printf '%s\n' \
       'PasswordAuthentication yes' \
       'PubkeyAuthentication yes' \
       'PermitRootLogin yes' \
       'PermitEmptyPasswords no' \
       'ChallengeResponseAuthentication no' \
-      'UsePAM yes' > /etc/ssh/sshd_config.d/50-password-auth.conf && \
+      'UsePAM yes' \
+      'X11Forwarding no' \
+      'PrintMotd no' \
+      'AcceptEnv LANG LC_*' \
+      'Subsystem sftp /usr/libexec/openssh/sftp-server' > /etc/ssh/sshd_config.d/50-password-auth.conf && \
+    mkdir -p /etc/ssh/ssh_host_keys && \
     systemctl enable sshd.service
 
 RUN mkdir -p \
