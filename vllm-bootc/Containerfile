@@ -5,6 +5,7 @@ RUN dnf -y install \
       podman \
       podman-plugins \
       jq \
+      curl \
       ca-certificates \
       cloud-init \
       sudo \
@@ -12,6 +13,23 @@ RUN dnf -y install \
 
 # Enable cloud-init services for AWS
 RUN systemctl enable cloud-init cloud-init-local cloud-config cloud-final
+
+# Configure cloud-init for AWS key injection and keep static passwords
+RUN mkdir -p /etc/cloud/cloud.cfg.d && \
+    printf '%s\n' \
+      'datasource_list: [ Ec2 ]' \
+      'disable_root: 0' \
+      'ssh_pwauth: true' \
+      'chpasswd:' \
+      '  expire: false' \
+      'system_info:' \
+      '  default_user:' \
+      '    name: ec2-user' \
+      '    lock_passwd: false' \
+      '    groups: [ wheel ]' \
+      '    sudo: ["ALL=(ALL) NOPASSWD:ALL"]' \
+      '    shell: /bin/bash' \
+      > /etc/cloud/cloud.cfg.d/90-aws-ssh.cfg
 
 # Create ec2-user with sudo access and set password
 # Use encrypted password hash for bootc compatibility (password: rhoim123)
@@ -49,12 +67,18 @@ COPY etc/containers/systemd/rhoim-vllm.container /etc/containers/systemd/rhoim-v
 COPY scripts/prefetch-model.sh /usr/local/bin/prefetch-model.sh
 RUN chmod +x /usr/local/bin/prefetch-model.sh
 
+COPY scripts/aws-fetch-ssh-key.sh /usr/local/bin/aws-fetch-ssh-key.sh
+RUN chmod +x /usr/local/bin/aws-fetch-ssh-key.sh
+
 COPY etc/systemd/system/rhoim-model-prefetch.service /etc/systemd/system/rhoim-model-prefetch.service
+COPY etc/systemd/system/aws-fetch-ssh-key.service /etc/systemd/system/aws-fetch-ssh-key.service
 
 # Enable the oneshot at boot (symlink works during build)
 RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
     ln -sf /etc/systemd/system/rhoim-model-prefetch.service \
-      /etc/systemd/system/multi-user.target.wants/rhoim-model-prefetch.service
+      /etc/systemd/system/multi-user.target.wants/rhoim-model-prefetch.service && \
+    ln -sf /etc/systemd/system/aws-fetch-ssh-key.service \
+      /etc/systemd/system/multi-user.target.wants/aws-fetch-ssh-key.service
 
 # Optional sysusers
 COPY etc/sysusers.d/rhoim.conf /etc/sysusers.d/rhoim.conf

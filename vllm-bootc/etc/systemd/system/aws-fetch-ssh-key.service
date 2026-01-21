@@ -1,0 +1,12 @@
+[Unit]
+Description=Fetch AWS EC2 SSH public key for ec2-user
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aws-fetch-ssh-key.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
